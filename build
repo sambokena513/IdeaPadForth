@@ -1,0 +1,3 @@
+#!/usr/bin/bash
+
+nasm -o artefacts/boot.bin source/boot.asm
