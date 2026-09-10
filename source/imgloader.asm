@@ -18,6 +18,8 @@ start:
     lea ax, [startmsg]
     call serial_puts16
 
+    ; todo: we should discover RAM before we exit real mode
+
     lgdt [gdtr]
     mov eax, cr0
     or eax, 1 ; CR0.PE
@@ -86,7 +88,7 @@ serial_puts16: ; args: ax (strptr) | clobbers: dx, bx
 
 bits 32
 
-serial_putc32: ; args: al (char) | clobbers: dx
+serial_putc32: ; args: al (char) | clobbers: edx
     push eax
 
     .wait:
@@ -112,11 +114,17 @@ serial_puts32: ; args: eax (strptr) | clobbers: edx, ebx
     .end:
     ret
 
+; todo: implement basic disk driver with read_blocks(lba, count, buf) and write_blocks(lba, count, buf) functions, our emulated disk is an ATA drive
+
 protected_mode:
     ; by now we should be in protected mode with flat segmentation, BIOS functions will no longer work
 
     lea ax, [prmmsg]
     call serial_puts32
+
+    ; todo: read image into memory with read_blocks(),
+    ; enter long mode, reenable maskable and nonmaskable interrupts,
+    ; and jump to image entry point
 
 hang:
     hlt
