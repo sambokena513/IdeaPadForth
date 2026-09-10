@@ -2,11 +2,21 @@ bits 16 ; we always start in 16-bit real mode
 org 0x7c00 ; BIOS loads our code at this address
 
 start:
-    cli ; so that we and stage two start without being interrupted
+    ; we reenable these in stage 2
+    cli
+
+    ; NMIs
+    in al, 0x70
+    or al, 0x80
+    out 0x70, al
 
     ; zero ds so we can use absolute addresses for our first 64kb (the size of stage 1 + stage 2)
     xor ax, ax
+    mov es, ax
+    mov ss, ax
     mov ds, ax
+
+    mov sp, 0x7c00 ; stack grows downwards from our bootstrap code
 
     ; print message so user knows their BIOS loaded the bootloader succesfully
     lea ax, [startmsg]
@@ -19,31 +29,37 @@ start:
     jc fatal
 
     test cx, 1 ; first bit should be set if LBA addressing is supported
-    jz fatal ; we don't deal with CHS since every BIOS since the '90s supports LBA, so we just fail here
+    jz fatal ; we don't deal with CHS since every BIOS since the 90s supports LBA, so we just fail here
 
     mov si, DAPS
-    mov ah, 0x42 ; read disk, note that we don't set dl here since BIOS starts our code with DL = the drive being booted
+    mov ah, 0x42 ; note that we don't set dl here since BIOS starts our code with DL = the drive being booted
     int 0x13
     jc fatal
 
-    mov al, [0x8000] ; first byte of stage 2's first sector is its length in disk sectors
+    mov al, [0x8000] ; first byte of stage 2 is its length in disk sectors
+    mov [0x8001], dl ; second byte of stage 2 is where we put the boot drive
     dec al ; since we already read 1 sector
     jz .handoff
 
     ; read extra sectors, stage two can be up to 127 sectors
     mov [DAPS_sector_count], al
-    mov ax, 512
-    add [DAPS_buffer], ax
+
+    ; skip sector we already loaded
+    add word [DAPS_buffer], 512
+    mov byte [DAPS_lbaaddr], 2
 
     ; no need to set up si since its value has not changed
-    mov ah, 0x42 ; read disk
+    mov ah, 0x42
     int 0x13
     jc fatal
 
     .handoff:
     lea ax, [endmsg]
     call putstr
-    jmp 0x8010 ; jmp to the start of the stage 2 code
+    ; jmp to the start of the stage 2 code,
+    ; +16 bytes because of the single-byte length header,
+    ; and then padding to ensure stage 2 starts at a 16-byte aligned address
+    jmp 0x8010
 
 hang:
     hlt
@@ -74,7 +90,7 @@ DAPS: ; disk address packet structure
 db 0x10, 0x00
 DAPS_sector_count dw 0x0001 ; number of sectors to transfer
 DAPS_buffer dw 0x8000, 0x0000 ; offset, segment; buffer to read into
-dq 1 ; lba address of first sector to read
+DAPS_lbaaddr dq 1 ; lba address of first sector to read
 
 errmsg db "STAGE1: Fatal error, hanging.", 13, 10, 0
 startmsg db "STAGE1: Starting.", 13, 10, 0
