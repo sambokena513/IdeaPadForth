@@ -114,7 +114,8 @@ serial_puts32: ; args: eax (strptr) | clobbers: edx, ebx
     .end:
     ret
 
-; todo: implement basic disk driver with read_blocks(lba, count, buf) and write_blocks(lba, count, buf) functions, our emulated disk is an ATA drive
+; todo: implement basic disk driver with read_blocks(lba, count, buf) and write_blocks(lba, count, buf) functions,
+; our emulated disk is an ATA drive, don't try to support anything else
 
 protected_mode:
     ; by now we should be in protected mode with flat segmentation, BIOS functions will no longer work
@@ -123,8 +124,10 @@ protected_mode:
     call serial_puts32
 
     ; todo: read image into memory with read_blocks(),
-    ; enter long mode, reenable maskable and nonmaskable interrupts,
     ; and jump to image entry point
+    ; img will then set up interrupts and handle entering long mode,
+    ; note that this means the main image may never be over 4GB,
+    ; since we wouldn't be able to load the whole thing in protected mode
 
 hang:
     hlt

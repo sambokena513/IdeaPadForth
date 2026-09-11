@@ -15,11 +15,35 @@ start:
     mov es, ax
     mov ss, ax
     mov ds, ax
-
     mov sp, 0x7c00 ; stack grows downwards from our bootstrap code
 
     ; print message so user knows their BIOS loaded the bootloader succesfully
     lea ax, [startmsg]
+    call putstr
+
+    ; try to enable A20
+    mov ax, 0x2403
+    int 0x15
+    jc fatal
+    test ah, ah
+    jc fatal
+
+    mov ax, 0x2402
+    int 0x15
+    jc fatal
+    test ah, ah
+    jc fatal
+    test al, al
+    jnz .a20_activated
+
+    mov ax, 0x2401
+    int 0x15
+    jc fatal
+    test ah, ah
+    jnz fatal
+
+    .a20_activated:
+    lea ax, [a20msg]
     call putstr
 
     ; check if EDD is supported
@@ -94,7 +118,8 @@ DAPS_lbaaddr dq 1 ; lba address of first sector to read
 
 errmsg db "STAGE1: Fatal error, hanging.", 13, 10, 0
 startmsg db "STAGE1: Starting.", 13, 10, 0
-endmsg db "STAGE1: Entering STAGE2.", 13, 10, 0
+a20msg db "STAGE1: A20 gate enabled.", 13, 10, 0
+endmsg db "STAGE1: Succesfully read STAGE2 from disk, entering STAGE2.", 13, 10, 0
 ; leave partition table empty since we don't use partitioning
 times 64 db 0
 ; pad file to 512 bytes
