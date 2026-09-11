@@ -2,6 +2,9 @@ bits 16 ; we always start in 16-bit real mode
 org 0x7c00 ; BIOS loads our code at this address
 
 start:
+    jmp 0:.skip ; make sure CS is correct
+    .skip:
+
     ; we reenable these in stage 2
     cli
 

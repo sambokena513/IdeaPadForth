@@ -2,6 +2,10 @@
 ; set up everything needed to be able to boot
 ; the forth image starting at lba 128
 
+; ABI note; we don't have a complex calling convention in the bootloader, especially in real mode, but once we switch to protected
+; mode we treat the first four registers (eax, ebx, ecx, edx) as caller-saved, and the other four (esi, edi, ebp, esp) as callee-saved,
+; and args as being in order in the first four registers. So a quaternary function is called with eax = arg1, ebx = arg2, ecx = arg3, and edx = arg4.
+
 bits 16
 org 0x8000 ; start just after boot sector
 
@@ -90,9 +94,10 @@ serial_puts16: ; args: ax (strptr) | clobbers: dx, bx
     .end:
     ret
 
+; from now on this is protected-mode code
 bits 32
 
-serial_putc32: ; args: al (char) | clobbers: edx
+serial_putc32: ; args: char
     push eax
 
     .wait:
@@ -106,7 +111,7 @@ serial_putc32: ; args: al (char) | clobbers: edx
         out dx, al
         ret
 
-serial_puts32: ; args: eax (strptr) | clobbers: edx, ebx
+serial_puts32: ; args: strptr
     mov ebx, eax
     .loop:
     mov al, [ebx]
@@ -117,6 +122,26 @@ serial_puts32: ; args: eax (strptr) | clobbers: edx, ebx
     jmp .loop
     .end:
     ret
+
+serial_puth32: ; args: number
+    mov ebx, eax
+
+    mov al, '0'
+    call serial_putc32
+    mov al, 'x'
+    call serial_putc32
+
+    mov ecx, 8
+    .loop:
+        rol ebx, 4
+        mov edx, ebx
+        and edx, 0xf
+
+        mov al, [hexchars + edx]
+        call serial_putc32
+        loop .loop
+    ret
+    
 
 ; todo: implement basic disk driver with read_blocks(lba, count, buf) and write_blocks(lba, count, buf) functions,
 ; our emulated disk is an ATA drive, don't try to support anything else
@@ -136,6 +161,13 @@ protected_mode:
 
     lea ax, [prmmsg]
     call serial_puts32
+
+    mov eax, esp
+    call serial_puth32
+    mov al, 13
+    call serial_putc32
+    mov al, 10
+    call serial_putc32
 
     ; todo: read image into memory with read_blocks(),
     ; and jump to image entry point
@@ -175,6 +207,8 @@ e820_arr:
 ; field so entries are 20 bytes rather than 24
 times 20 * 255 db 0
 
+; used for printing numbers
+hexchars db "0123456789abcdef"
 errmsg db "STAGE2: Fatal error, hanging.", 13, 10, 0
 startmsg db "STAGE2: Starting.", 13, 10, 0
 e820msg db "STAGE2: Detecting memory.", 13, 10, 0

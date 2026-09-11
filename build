@@ -3,4 +3,5 @@
 nasm -o "artefacts/boot.bin" "source/boot.asm" &&
 nasm -o "artefacts/imgloader.bin" "source/imgloader.asm" &&
 
-cat "artefacts/boot.bin" "artefacts/imgloader.bin" > "artefacts/disk.bin"
+cat "artefacts/boot.bin" "artefacts/imgloader.bin" > "artefacts/disk.bin" &&
+truncate -s 1G "artefacts/disk.bin"
