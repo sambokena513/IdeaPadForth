@@ -18,7 +18,7 @@ start:
     lea ax, [startmsg]
     call serial_puts16
 
-    ; todo: we should discover RAM before we exit real mode
+    ; todo: we should discover RAM with e820 before we exit real mode
 
     lgdt [gdtr]
     mov eax, cr0
@@ -26,6 +26,10 @@ start:
     mov cr0, eax
 
     jmp 0x08:protected_mode
+
+get_mmap:
+    ; todo: call int 0x15 EAX=0xE820 in a loop to populate our entry array
+    ret
 
 COM1 equ 0x3f8
 serial_init:
@@ -136,8 +140,6 @@ protected_mode:
     ; todo: read image into memory with read_blocks(),
     ; and jump to image entry point
     ; img will then set up interrupts and handle entering long mode,
-    ; note that this means the main image may never be over 4GB,
-    ; since we wouldn't be able to load the whole thing in protected mode
 
 hang:
     hlt
@@ -167,7 +169,15 @@ gdtr:
 dw gdt_end - gdt - 1 ; limit
 dd gdt ; base
 
+e820_arr_len db 0
+e820_arr:
+; space for 255 entries, we don't use the extended
+; field so entries are 20 bytes rather than 24
+times 20 * 255 db 0
+
+errmsg db "STAGE2: Fatal error, hanging.", 13, 10, 0
 startmsg db "STAGE2: Starting.", 13, 10, 0
+e820msg db "STAGE2: Detecting memory.", 13, 10, 0
 prmmsg db "STAGE2: Successfully entered protected mode.", 13, 10, 0
 
 ; mark the end so we can calculate how many sectors this takes up

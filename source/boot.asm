@@ -36,13 +36,13 @@ start:
     int 0x15
     jc fatal
     test ah, ah
-    jc fatal
+    jnz fatal
 
     mov ax, 0x2402
     int 0x15
     jc fatal
     test ah, ah
-    jc fatal
+    jnz fatal
     test al, al
     jnz .a20_activated
 
