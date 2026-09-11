@@ -120,6 +120,16 @@ serial_puts32: ; args: eax (strptr) | clobbers: edx, ebx
 protected_mode:
     ; by now we should be in protected mode with flat segmentation, BIOS functions will no longer work
 
+    ; initialize segment registers
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
+    mov ss, ax
+
+    ; we already set sp in stage 1 but we need to make sure
+    ; it's sane again since we switched memory models
+    mov esp, 0x7c00
+
     lea ax, [prmmsg]
     call serial_puts32
 
@@ -158,7 +168,7 @@ dw gdt_end - gdt - 1 ; limit
 dd gdt ; base
 
 startmsg db "STAGE2: Starting.", 13, 10, 0
-prmmsg db "STAGE2: Entered protected mode.", 13, 10, 0
+prmmsg db "STAGE2: Successfully entered protected mode.", 13, 10, 0
 
 ; mark the end so we can calculate how many sectors this takes up
 end equ $
