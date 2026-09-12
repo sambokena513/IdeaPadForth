@@ -9,6 +9,18 @@
 bits 16
 org 0x8000 ; start just after boot sector
 
+%define e820_base_offset 0 ; qword
+%define e820_length_offset 8 ; qword
+%define e820_type_offset 16 ; dword
+
+; essentially only type 1 is initially allocatable
+
+%define e820_USABLE 1 ; valid RAM
+%define e820_RESERVED 2 ; reserved by firmware or devices
+%define e820_ACPI 3 ; can reclaim after processing ACPI data
+%define e820_NVS 4 ; firmware expects this to be preserved across sleep/restore states
+%define e820_UNUSABLE 5 ; bad memory
+
 ; number of sectors the stage 1 loader should read before jumping here
 db (end - $$ + 511) / 512
 boot_drive db 0
@@ -16,13 +28,14 @@ align 16
 
 ; this should be at 0x8010
 start:
-    ; at this point ds, es, and ss should be zeroed, and all interrupts should be disabled
+    ; at this point cs, ds, es, and ss should be zeroed, and all interrupts should be disabled
+
     call serial_init
 
     lea ax, [startmsg]
     call serial_puts16
 
-    ; todo: we should discover RAM with e820 before we exit real mode
+    call get_mmap
 
     lgdt [gdtr]
     mov eax, cr0
@@ -32,8 +45,20 @@ start:
     jmp 0x08:protected_mode
 
 get_mmap:
-    ; todo: call int 0x15 EAX=0xE820 in a loop to populate our entry array
+    lea ax, [e820msg]
+    call serial_puts16
+
+    ; todo: call int 0x15 EAX=0xE820 in a loop to populate our entry array,
+    ; if any problems, fatal
+
     ret
+
+fatal:
+    lea ax, [errmsg]
+    call serial_puts16
+    .hang:
+        hlt
+        jmp .hang
 
 COM1 equ 0x3f8
 serial_init:
@@ -125,12 +150,6 @@ serial_puts32: ; args: strptr
 
 serial_puth32: ; args: number
     mov ebx, eax
-
-    mov al, '0'
-    call serial_putc32
-    mov al, 'x'
-    call serial_putc32
-
     mov ecx, 8
     .loop:
         rol ebx, 4
@@ -161,13 +180,6 @@ protected_mode:
 
     lea ax, [prmmsg]
     call serial_puts32
-
-    mov eax, esp
-    call serial_puth32
-    mov al, 13
-    call serial_putc32
-    mov al, 10
-    call serial_putc32
 
     ; todo: read image into memory with read_blocks(),
     ; and jump to image entry point
