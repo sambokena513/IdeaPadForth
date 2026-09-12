@@ -1,0 +1,426 @@
+     1                                  ; forth image loader, this file's job is to
+     2                                  ; set up everything needed to be able to boot
+     3                                  ; the forth image starting at lba 128
+     4                                  
+     5                                  ; ABI note; we don't have a complex calling convention in the bootloader, especially in real mode, but once we switch to protected
+     6                                  ; mode we treat the first four registers (eax, ebx, ecx, edx) as caller-saved, and the other four (esi, edi, ebp, esp) as callee-saved,
+     7                                  ; and args as being in order in the first four registers. So a quaternary function is called with eax = arg1, ebx = arg2, ecx = arg3, and edx = arg4.
+     8                                  
+     9                                  bits 16
+    10                                  org 0x8000 ; start just after boot sector
+    11                                  
+    12                                  %define e820_base_offset 0 ; qword
+    13                                  %define e820_length_offset 8 ; qword
+    14                                  %define e820_type_offset 16 ; dword
+    15                                  
+    16                                  ; essentially only type 1 is initially allocatable
+    17                                  
+    18                                  %define e820_USABLE 1 ; valid RAM
+    19                                  %define e820_RESERVED 2 ; reserved by firmware or devices
+    20                                  %define e820_ACPI 3 ; can reclaim after processing ACPI data
+    21                                  %define e820_NVS 4 ; firmware expects this to be preserved across sleep/restore states
+    22                                  %define e820_UNUSABLE 5 ; bad memory
+    23                                  %define SMAP 0x534d4150
+    24                                  
+    25                                  ; very slightly increases binary size compared to db because it uses a jmp,
+    26                                  ; but we have 32KB of code space here, so it's not really an issue for the convenience
+    27                                  %macro lstr 2+
+    28                                      jmp %%skip
+    29                                      %%string:
+    30                                      db %2,0
+    31                                      %%skip:
+    32                                      lea %1,%%string
+    33                                  %endmacro
+    34                                  
+    35                                  ; number of sectors the stage 1 loader should read before jumping here
+    36 00000000 0C                      db (end - $$ + 511) / 512
+    37 00000001 00                      boot_drive db 0
+    38 00000002 90<rep Eh>              align 16
+    39                                  
+    40                                  ; this should be at 0x8010
+    41                                  start:
+    42                                      ; at this point cs, ds, es, and ss should be zeroed, and all interrupts should be disabled
+    43                                  
+    44 00000010 E8F200                      call serial_init
+    45                                  
+    46                                      lstr ax, `Starting. \r\n`
+    28 00000013 EB0D                <1>  jmp %%skip
+    29                              <1>  %%string:
+    30 00000015 5374617274696E672E- <1>  db %2,0
+    30 0000001E 200D0A00            <1>
+    31                              <1>  %%skip:
+    32 00000022 8D06[1500]          <1>  lea %1,%%string
+    47 00000026 E81001                      call serial_puts16
+    48                                  
+    49 00000029 E81400                      call get_mmap
+    50                                  
+    51 0000002C 0F0116[2203]                lgdt [gdtr]
+    52 00000031 0F20C0                      mov eax, cr0
+    53 00000034 6683C801                    or eax, 1 ; CR0.PE
+    54 00000038 0F22C0                      mov cr0, eax
+    55                                  
+    56 0000003B EA[CC02]0800                jmp 0x08:protected_mode
+    57                                  
+    58                                  get_mmap:
+    59                                      lstr ax, `Detecting memory.\r\n`
+    28 00000040 EB14                <1>  jmp %%skip
+    29                              <1>  %%string:
+    30 00000042 446574656374696E67- <1>  db %2,0
+    30 0000004B 206D656D6F72792E0D- <1>
+    30 00000054 0A00                <1>
+    31                              <1>  %%skip:
+    32 00000056 8D06[4200]          <1>  lea %1,%%string
+    60 0000005A E8DC00                      call serial_puts16
+    61                                  
+    62 0000005D 8D3E[2903]                  lea di, [e820_arr]
+    63 00000061 66BA50414D53                mov edx, SMAP
+    64 00000067 66B914000000                mov ecx, 20 ; short entries, not extended ones
+    65 0000006D 6631DB                      xor ebx, ebx
+    66 00000070 66B820E80000                mov eax, 0xe820
+    67 00000076 CD15                        int 0x15
+    68 00000078 7267                        jc fatal16
+    69 0000007A 663D50414D53                cmp eax, SMAP
+    70 00000080 755F                        jne fatal16
+    71 00000082 80F914                      cmp cl, 20 ; a bit paranoid
+    72 00000085 755A                        jne fatal16
+    73                                  
+    74                                      ; first iter setup
+    75 00000087 8006[2803]01                add byte [e820_arr_len], 1
+    76 0000008C 83C714                      add di, 20
+    77                                  
+    78                                      ; call e820 until ebx is zero or the carry flag is set
+    79                                      .loop:
+    80 0000008F 66BA50414D53                    mov edx, SMAP
+    81 00000095 66B914000000                    mov ecx, 20
+    82 0000009B 66B820E80000                    mov eax, 0xe820
+    83 000000A1 CD15                            int 0x15
+    84 000000A3 7215                            jc .end ; carry on a call other than first means end of list
+    85 000000A5 6683FB00                        cmp ebx, 0
+    86 000000A9 740F                            je .end
+    87 000000AB 80F914                          cmp cl, 20
+    88 000000AE 7531                            jne fatal16
+    89 000000B0 8006[2803]01                    add byte [e820_arr_len], 1
+    90 000000B5 83C714                          add di, 20
+    91 000000B8 EBD5                            jmp .loop
+    92                                      .end:
+    93                                  
+    94                                      lstr ax, `Finished detecting memory.\r\n`
+    28 000000BA EB1D                <1>  jmp %%skip
+    29                              <1>  %%string:
+    30 000000BC 46696E697368656420- <1>  db %2,0
+    30 000000C5 646574656374696E67- <1>
+    30 000000CE 206D656D6F72792E0D- <1>
+    30 000000D7 0A00                <1>
+    31                              <1>  %%skip:
+    32 000000D9 8D06[BC00]          <1>  lea %1,%%string
+    95 000000DD E85900                      call serial_puts16
+    96                                  
+    97 000000E0 C3                          ret
+    98                                  
+    99                                  fatal16:
+   100                                      lstr ax, `Fatal error, hanging.\r\n`
+    28 000000E1 EB18                <1>  jmp %%skip
+    29                              <1>  %%string:
+    30 000000E3 466174616C20657272- <1>  db %2,0
+    30 000000EC 6F722C2068616E6769- <1>
+    30 000000F5 6E672E0D0A00        <1>
+    31                              <1>  %%skip:
+    32 000000FB 8D06[E300]          <1>  lea %1,%%string
+   101 000000FF E83700                      call serial_puts16
+   102                                      .hang:
+   103 00000102 F4                              hlt
+   104 00000103 EBFD                            jmp .hang
+   105                                  
+   106                                  COM1 equ 0x3f8
+   107                                  serial_init:
+   108                                      ; disable interrupts
+   109 00000105 BAF903                      mov dx, COM1 + 1
+   110 00000108 B000                        mov al, 0
+   111 0000010A EE                          out dx, al
+   112                                  
+   113                                      ; enable DLAB, st baud divisor to 3 = 38400 baud
+   114 0000010B BAFB03                      mov dx, COM1 + 3
+   115 0000010E B080                        mov al, 0x80
+   116 00000110 EE                          out dx, al
+   117                                  
+   118 00000111 BAF803                      mov dx, COM1 + 0
+   119 00000114 B003                        mov al, 3
+   120 00000116 EE                          out dx, al
+   121                                  
+   122                                      ; 8 bits, no parity, 1 stop bit
+   123 00000117 BAFB03                      mov dx, COM1 + 3
+   124 0000011A B003                        mov al, 0x03
+   125 0000011C EE                          out dx, al
+   126                                  
+   127                                      ; enable FIFO, clear them, 14-byte threshold
+   128 0000011D BAFA03                      mov dx, COM1 + 2
+   129 00000120 B0C7                        mov al, 0xc7
+   130 00000122 EE                          out dx, al
+   131                                  
+   132                                      ; IRQs disabled, RST/DSR set
+   133 00000123 BAFC03                      mov dx, COM1 + 4
+   134 00000126 B003                        mov al, 0x03
+   135 00000128 EE                          out dx, al
+   136                                  
+   137 00000129 C3                          ret
+   138                                  
+   139                                  serial_putc16: ; args: al (char) | clobbers: dx
+   140 0000012A 50                          push ax
+   141                                  
+   142                                      .wait:
+   143 0000012B BAFD03                          mov dx, COM1 + 5
+   144 0000012E EC                              in al, dx
+   145 0000012F A820                            test al, 0x20
+   146 00000131 74F8                            jz .wait
+   147                                  
+   148 00000133 58                              pop ax
+   149 00000134 BAF803                          mov dx, COM1 + 0
+   150 00000137 EE                              out dx, al
+   151 00000138 C3                              ret
+   152                                  
+   153                                  serial_puts16: ; args: ax (strptr) | clobbers: dx, bx
+   154 00000139 89C3                        mov bx, ax
+   155                                      .loop:
+   156 0000013B 8A07                        mov al, [bx]
+   157 0000013D 84C0                        test al, al
+   158 0000013F 7406                        jz .end
+   159 00000141 E8E6FF                      call serial_putc16
+   160 00000144 43                          inc bx
+   161 00000145 EBF4                        jmp .loop
+   162                                      .end:
+   163 00000147 C3                          ret
+   164                                  
+   165                                  ; from now on this is protected-mode code
+   166                                  bits 32
+   167                                  
+   168                                  fatal32:
+   169                                      lstr eax, `Fatal error, hanging.\r\n`
+    28 00000148 EB18                <1>  jmp %%skip
+    29                              <1>  %%string:
+    30 0000014A 466174616C20657272- <1>  db %2,0
+    30 00000153 6F722C2068616E6769- <1>
+    30 0000015C 6E672E0D0A00        <1>
+    31                              <1>  %%skip:
+    32 00000162 8D05[4A010000]      <1>  lea %1,%%string
+   170 00000168 E814000000                  call serial_puts32
+   171                                      .hang:
+   172 0000016D F4                              hlt
+   173 0000016E EBFD                            jmp .hang
+   174                                  
+   175                                  serial_putc32: ; args: char
+   176 00000170 50                          push eax
+   177                                  
+   178                                      .wait:
+   179 00000171 66BAFD03                        mov dx, COM1 + 5
+   180 00000175 EC                              in al, dx
+   181 00000176 A820                            test al, 0x20
+   182 00000178 74F7                            jz .wait
+   183                                  
+   184 0000017A 58                              pop eax
+   185 0000017B 66BAF803                        mov dx, COM1 + 0
+   186 0000017F EE                              out dx, al
+   187 00000180 C3                              ret
+   188                                  
+   189                                  serial_puts32: ; args: strptr
+   190 00000181 89C3                        mov ebx, eax
+   191                                      .loop:
+   192 00000183 8A03                        mov al, [ebx]
+   193 00000185 84C0                        test al, al
+   194 00000187 7408                        jz .end
+   195 00000189 E8E2FFFFFF                  call serial_putc32
+   196 0000018E 43                          inc ebx
+   197 0000018F EBF2                        jmp .loop
+   198                                      .end:
+   199 00000191 C3                          ret
+   200                                  
+   201                                  serial_puth32: ; args: number
+   202 00000192 89C3                        mov ebx, eax
+   203 00000194 B908000000                  mov ecx, 8
+   204                                      .loop:
+   205 00000199 C1C304                          rol ebx, 4
+   206 0000019C 89DA                            mov edx, ebx
+   207 0000019E 83E20F                          and edx, 0xf
+   208                                  
+   209 000001A1 8A82[15170000]                  mov al, [hexchars + edx]
+   210 000001A7 E8C4FFFFFF                      call serial_putc32
+   211 000001AC E2EB                            loop .loop
+   212 000001AE C3                          ret
+   213                                  
+   214                                  ; print 0 or more e820 entries
+   215                                  print_mmap: ; no args
+   216 000001AF 31C9                        xor ecx, ecx
+   217                                      .loop:
+   218 000001B1 0FB605[28030000]                movzx eax, byte [e820_arr_len]
+   219 000001B8 66BA1400                        mov dx, 20
+   220 000001BC 66F7E2                          mul dx
+   221 000001BF 39C1                            cmp ecx, eax
+   222 000001C1 0F8404010000                    je .exit
+   223 000001C7 51                              push ecx
+   224                                  
+   225                                          lstr eax, `----ENTRY----\r\n`
+    28 000001C8 EB10                <1>  jmp %%skip
+    29                              <1>  %%string:
+    30 000001CA 2D2D2D2D454E545259- <1>  db %2,0
+    30 000001D3 2D2D2D2D0D0A00      <1>
+    31                              <1>  %%skip:
+    32 000001DA 8D05[CA010000]      <1>  lea %1,%%string
+   226 000001E0 E89CFFFFFF                      call serial_puts32
+   227                                  
+   228                                          ; address
+   229                                          lstr eax, `ADDRESS = 0x`
+    28 000001E5 EB0D                <1>  jmp %%skip
+    29                              <1>  %%string:
+    30 000001E7 41444452455353203D- <1>  db %2,0
+    30 000001F0 20307800            <1>
+    31                              <1>  %%skip:
+    32 000001F4 8D05[E7010000]      <1>  lea %1,%%string
+   230 000001FA E882FFFFFF                      call serial_puts32
+   231 000001FF 8B0C24                          mov ecx, [esp]
+   232 00000202 8B81[2D030000]                  mov eax, [e820_arr + ecx + 4]
+   233 00000208 E885FFFFFF                      call serial_puth32
+   234 0000020D 8B0C24                          mov ecx, [esp]
+   235 00000210 8B81[29030000]                  mov eax, [e820_arr + ecx]
+   236 00000216 E877FFFFFF                      call serial_puth32
+   237                                          lstr eax, `\r\n`
+    28 0000021B EB03                <1>  jmp %%skip
+    29                              <1>  %%string:
+    30 0000021D 0D0A00              <1>  db %2,0
+    31                              <1>  %%skip:
+    32 00000220 8D05[1D020000]      <1>  lea %1,%%string
+   238 00000226 E856FFFFFF                      call serial_puts32
+   239                                  
+   240                                          ; length
+   241                                          lstr eax, `LENGTH = 0x`
+    28 0000022B EB0C                <1>  jmp %%skip
+    29                              <1>  %%string:
+    30 0000022D 4C454E475448203D20- <1>  db %2,0
+    30 00000236 307800              <1>
+    31                              <1>  %%skip:
+    32 00000239 8D05[2D020000]      <1>  lea %1,%%string
+   242 0000023F E83DFFFFFF                      call serial_puts32
+   243 00000244 8B0C24                          mov ecx, [esp]
+   244 00000247 8B81[35030000]                  mov eax, [e820_arr + ecx + 12]
+   245 0000024D E840FFFFFF                      call serial_puth32
+   246 00000252 8B0C24                          mov ecx, [esp]
+   247 00000255 8B81[31030000]                  mov eax, [e820_arr + ecx + 8]
+   248 0000025B E832FFFFFF                      call serial_puth32
+   249                                          lstr eax, `\r\n`
+    28 00000260 EB03                <1>  jmp %%skip
+    29                              <1>  %%string:
+    30 00000262 0D0A00              <1>  db %2,0
+    31                              <1>  %%skip:
+    32 00000265 8D05[62020000]      <1>  lea %1,%%string
+   250 0000026B E811FFFFFF                      call serial_puts32
+   251                                  
+   252                                          ; type
+   253                                          lstr eax, `TYPE = 0x`
+    28 00000270 EB0A                <1>  jmp %%skip
+    29                              <1>  %%string:
+    30 00000272 54595045203D203078- <1>  db %2,0
+    30 0000027B 00                  <1>
+    31                              <1>  %%skip:
+    32 0000027C 8D05[72020000]      <1>  lea %1,%%string
+   254 00000282 E8FAFEFFFF                      call serial_puts32
+   255 00000287 8B0C24                          mov ecx, [esp]
+   256 0000028A 8B81[39030000]                  mov eax, [e820_arr + ecx + 16]
+   257 00000290 E8FDFEFFFF                      call serial_puth32
+   258                                          lstr eax, `\r\n`
+    28 00000295 EB03                <1>  jmp %%skip
+    29                              <1>  %%string:
+    30 00000297 0D0A00              <1>  db %2,0
+    31                              <1>  %%skip:
+    32 0000029A 8D05[97020000]      <1>  lea %1,%%string
+   259 000002A0 E8DCFEFFFF                      call serial_puts32
+   260                                  
+   261                                          lstr eax, `-----END-----\r\n`
+    28 000002A5 EB10                <1>  jmp %%skip
+    29                              <1>  %%string:
+    30 000002A7 2D2D2D2D2D454E442D- <1>  db %2,0
+    30 000002B0 2D2D2D2D0D0A00      <1>
+    31                              <1>  %%skip:
+    32 000002B7 8D05[A7020000]      <1>  lea %1,%%string
+   262 000002BD E8BFFEFFFF                      call serial_puts32
+   263                                  
+   264 000002C2 59                              pop ecx
+   265 000002C3 83C114                          add ecx, 20
+   266 000002C6 E9E6FEFFFF                      jmp .loop
+   267                                      .exit:
+   268                                  
+   269 000002CB C3                          ret
+   270                                  
+   271                                  ; todo: implement basic disk driver with read_blocks(lba, count, buf) and write_blocks(lba, count, buf) functions,
+   272                                  ; our emulated disk is an ATA drive, don't try to support anything else, use ATA PIO mode (slow af but easier to implement),
+   273                                  ; besides, I'm trying to write a language runtime more than I am an OS, so I don't care about having good drivers as much
+   274                                  
+   275                                  protected_mode:
+   276                                      ; by now we should be in protected mode with flat segmentation, BIOS functions will no longer work
+   277                                  
+   278                                      ; initialize segment registers
+   279 000002CC 66B81000                    mov ax, 0x10
+   280 000002D0 8ED8                        mov ds, ax
+   281 000002D2 8EC0                        mov es, ax
+   282 000002D4 8ED0                        mov ss, ax
+   283                                  
+   284                                      ; we already set sp in stage 1 but we need to make sure
+   285                                      ; it's sane again since we switched memory models
+   286 000002D6 BC007C0000                  mov esp, 0x7c00
+   287                                  
+   288                                      lstr eax, `Entered protected mode.\r\n`
+    28 000002DB EB1A                <1>  jmp %%skip
+    29                              <1>  %%string:
+    30 000002DD 456E74657265642070- <1>  db %2,0
+    30 000002E6 726F74656374656420- <1>
+    30 000002EF 6D6F64652E0D0A00    <1>
+    31                              <1>  %%skip:
+    32 000002F7 8D05[DD020000]      <1>  lea %1,%%string
+   289 000002FD E87FFEFFFF                  call serial_puts32
+   290                                  
+   291 00000302 E8A8FEFFFF                  call print_mmap
+   292                                  
+   293                                      ; todo: read image into memory with read_blocks(),
+   294                                      ; and jump to image entry point
+   295                                      ; img will then set up interrupts and handle entering long mode,
+   296                                  
+   297                                  hang:
+   298 00000307 F4                          hlt
+   299 00000308 EBFD                        jmp hang
+   300                                  
+   301                                  gdt:
+   302 0000030A 0000000000000000            dq 0 ; must be null
+   303                                  
+   304                                      ; code, base = 0, limit = 4GB
+   305 00000312 FFFF                        dw 0xffff ; limit 15:0
+   306 00000314 0000                        dw 0 ; base 15:0
+   307 00000316 00                          db 0 ; base 23:16
+   308 00000317 9A                          db 0b10011010 ; readable code segment, nonconforming
+   309 00000318 CF                          db 0b11001111 ; last 4 bits in the limit, 4KB granularity and 32-bit size
+   310 00000319 00                          db 0 ; base 31:24
+   311                                  
+   312                                      ; data, base = 0, limit = 4GB
+   313 0000031A FFFF                        dw 0xffff
+   314 0000031C 0000                        dw 0
+   315 0000031E 00                          db 0
+   316 0000031F 92                          db 0b10010010
+   317 00000320 CF                          db 0b11001111
+   318 00000321 00                          db 0
+   319                                  gdt_end:
+   320                                  
+   321                                  gdtr:
+   322 00000322 1700                    dw gdt_end - gdt - 1 ; limit
+   323 00000324 [0A030000]              dd gdt ; base
+   324                                  
+   325 00000328 00                      e820_arr_len db 0
+   326                                  e820_arr:
+   327                                  ; space for 255 entries, we don't use the extended
+   328                                  ; field so entries are 20 bytes rather than 24
+   329 00000329 00<rep 13ECh>           times 20 * 255 db 0
+   330                                  
+   331                                  ; used for printing numbers
+   332 00001715 303132333435363738-     hexchars db "0123456789abcdef"
+   332 0000171E 39616263646566     
+   333                                  ; mark the end so we can calculate how many sectors this takes up
+   334                                  end equ $
+   335                                  
+   336                                  ; pad to 127 sectors, together with the boot sector
+   337                                  ; this makes the pre-image disk be 128 sectors
+   338 00001725 00<rep E6DBh>           times 512 * 127 - ($ - $$) db 0

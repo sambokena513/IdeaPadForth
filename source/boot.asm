@@ -129,10 +129,10 @@ DAPS_sector_count dw 0x0001 ; number of sectors to transfer
 DAPS_buffer dw 0x8000, 0x0000 ; offset, segment; buffer to read into
 DAPS_lbaaddr dq 1 ; lba address of first sector to read
 
-errmsg db "STAGE1: Fatal error, hanging.", 13, 10, 0
-startmsg db "STAGE1: Starting.", 13, 10, 0
-a20msg db "STAGE1: A20 gate enabled.", 13, 10, 0
-endmsg db "STAGE1: Succesfully read STAGE2 from disk, entering STAGE2.", 13, 10, 0
+startmsg db "MBR Bootstrap code started.", 13, 10, 0
+errmsg db "Fatal error, hanging.", 13, 10, 0
+a20msg db "A20 gate enabled.", 13, 10, 0
+endmsg db "Succesfully read stage 2 from disk, entering stage 2", 13, 10, 0
 ; leave partition table empty since we don't use partitioning
 times 64 db 0
 ; pad file to 512 bytes

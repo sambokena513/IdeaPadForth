@@ -20,6 +20,17 @@ org 0x8000 ; start just after boot sector
 %define e820_ACPI 3 ; can reclaim after processing ACPI data
 %define e820_NVS 4 ; firmware expects this to be preserved across sleep/restore states
 %define e820_UNUSABLE 5 ; bad memory
+%define SMAP 0x534d4150
+
+; very slightly increases binary size compared to db because it uses a jmp,
+; but we have 32KB of code space here, so it's not really an issue for the convenience
+%macro lstr 2+
+    jmp %%skip
+    %%string:
+    db %2,0
+    %%skip:
+    lea %1,%%string
+%endmacro
 
 ; number of sectors the stage 1 loader should read before jumping here
 db (end - $$ + 511) / 512
@@ -32,7 +43,7 @@ start:
 
     call serial_init
 
-    lea ax, [startmsg]
+    lstr ax, `Starting. \r\n`
     call serial_puts16
 
     call get_mmap
@@ -45,16 +56,48 @@ start:
     jmp 0x08:protected_mode
 
 get_mmap:
-    lea ax, [e820msg]
+    lstr ax, `Detecting memory.\r\n`
     call serial_puts16
 
-    ; todo: call int 0x15 EAX=0xE820 in a loop to populate our entry array,
-    ; if any problems, fatal
+    lea di, [e820_arr]
+    mov edx, SMAP
+    mov ecx, 20 ; short entries, not extended ones
+    xor ebx, ebx
+    mov eax, 0xe820
+    int 0x15
+    jc fatal16
+    cmp eax, SMAP
+    jne fatal16
+    cmp cl, 20 ; a bit paranoid
+    jne fatal16
+
+    ; first iter setup
+    add byte [e820_arr_len], 1
+    add di, 20
+
+    ; call e820 until ebx is zero or the carry flag is set
+    .loop:
+        mov edx, SMAP
+        mov ecx, 20
+        mov eax, 0xe820
+        int 0x15
+        jc .end ; carry on a call other than first means end of list
+        cmp ebx, 0
+        je .end
+        cmp cl, 20
+        jne fatal16
+        add byte [e820_arr_len], 1
+        add di, 20
+        jmp .loop
+    .end:
+
+    lstr ax, `Finished detecting memory.\r\n`
+    call serial_puts16
 
     ret
 
-fatal:
-    lea ax, [errmsg]
+fatal16:
+    lstr ax, `Fatal error, hanging.\r\n`
     call serial_puts16
     .hang:
         hlt
@@ -122,6 +165,13 @@ serial_puts16: ; args: ax (strptr) | clobbers: dx, bx
 ; from now on this is protected-mode code
 bits 32
 
+fatal32:
+    lstr eax, `Fatal error, hanging.\r\n`
+    call serial_puts32
+    .hang:
+        hlt
+        jmp .hang
+
 serial_putc32: ; args: char
     push eax
 
@@ -160,10 +210,67 @@ serial_puth32: ; args: number
         call serial_putc32
         loop .loop
     ret
-    
+
+; print 0 or more e820 entries
+print_mmap: ; no args
+    xor ecx, ecx
+    .loop:
+        movzx eax, byte [e820_arr_len]
+        mov dx, 20
+        mul dx
+        cmp ecx, eax
+        je .exit
+        push ecx
+
+        lstr eax, `----ENTRY----\r\n`
+        call serial_puts32
+
+        ; address
+        lstr eax, `ADDRESS = 0x`
+        call serial_puts32
+        mov ecx, [esp]
+        mov eax, [e820_arr + ecx + 4]
+        call serial_puth32
+        mov ecx, [esp]
+        mov eax, [e820_arr + ecx]
+        call serial_puth32
+        lstr eax, `\r\n`
+        call serial_puts32
+
+        ; length
+        lstr eax, `LENGTH = 0x`
+        call serial_puts32
+        mov ecx, [esp]
+        mov eax, [e820_arr + ecx + 12]
+        call serial_puth32
+        mov ecx, [esp]
+        mov eax, [e820_arr + ecx + 8]
+        call serial_puth32
+        lstr eax, `\r\n`
+        call serial_puts32
+
+        ; type
+        lstr eax, `TYPE = 0x`
+        call serial_puts32
+        mov ecx, [esp]
+        mov eax, [e820_arr + ecx + 16]
+        call serial_puth32
+        lstr eax, `\r\n`
+        call serial_puts32
+
+        lstr eax, `-----END-----\r\n`
+        call serial_puts32
+
+        pop ecx
+        add ecx, 20
+        jmp .loop
+    .exit:
+
+    ret
 
 ; todo: implement basic disk driver with read_blocks(lba, count, buf) and write_blocks(lba, count, buf) functions,
-; our emulated disk is an ATA drive, don't try to support anything else
+; our emulated disk is an ATA drive, don't try to support anything else, use ATA PIO mode (slow af but easier to implement),
+; besides, I'm trying to write a language runtime more than I am an OS, so I don't care about having good drivers as much
 
 protected_mode:
     ; by now we should be in protected mode with flat segmentation, BIOS functions will no longer work
@@ -178,8 +285,10 @@ protected_mode:
     ; it's sane again since we switched memory models
     mov esp, 0x7c00
 
-    lea ax, [prmmsg]
+    lstr eax, `Entered protected mode.\r\n`
     call serial_puts32
+
+    call print_mmap
 
     ; todo: read image into memory with read_blocks(),
     ; and jump to image entry point
@@ -221,11 +330,6 @@ times 20 * 255 db 0
 
 ; used for printing numbers
 hexchars db "0123456789abcdef"
-errmsg db "STAGE2: Fatal error, hanging.", 13, 10, 0
-startmsg db "STAGE2: Starting.", 13, 10, 0
-e820msg db "STAGE2: Detecting memory.", 13, 10, 0
-prmmsg db "STAGE2: Successfully entered protected mode.", 13, 10, 0
-
 ; mark the end so we can calculate how many sectors this takes up
 end equ $
 
