@@ -40,7 +40,6 @@ align 16
 ; this should be at 0x8010
 start:
     ; at this point cs, ds, es, and ss should be zeroed, and all interrupts should be disabled
-
     call serial_init
 
     lstr ax, `Starting. \r\n`
@@ -268,9 +267,50 @@ print_mmap: ; no args
 
     ret
 
-read_blocks:
-        ; todo: implement basic temporary disk driver with read_blocks(lba, count, buf) function,
-        ; our emulated disk is an ATA drive, don't try to support anything else, use ATA PIO Mode (slow but easier to implement)
+; port IO helpers, since this is a temporary driver and we're explicitly not trying to support new hardware, we can hardcode these numbers
+%define ATA_pBASE 0x1f0
+
+; "I/O" ports
+%define ATA_pDATA ATA_pBASE ; 16-bit param size, all others are 8-bit since we use LBA28
+%define ATA_pERROR ATA_pBASE + 1
+%define ATA_pFEATURES ATA_pBASE + 1
+%define ATA_pSECTOR_COUNT ATA_pBASE + 2
+%define ATA_pLBAlo ATA_pBASE + 3
+%define ATA_pLBAmid ATA_pBASE + 4
+%define ATA_pLBAhi ATA_pBASE + 5
+%define ATA_pDRIVE ATA_pBASE + 6
+%define ATA_pSTATUS ATA_pBASE + 7
+%define ATA_pCOMMAND ATA_pBASE + 7
+
+; "Control" ports
+%define ATA_pCTL_BASE 0x3f6
+%define ATA_pALT_STATUS ATA_pCTL_BASE ; like status, but reading does not affect IRQs
+%define ATA_pDEV_CTL ATA_pCTL_BASE
+%define ATA_pDRIVE_ADDR ATA_pCTL_BASE + 1
+
+; errors
+%define ATA_MNF 1 ; address mark not found
+%define TKZNF 2 ; track zero not found
+%define ABRT 4 ; aborted
+%define MCR 8 ; media change request
+%define IDNF 16 ; id not found
+%define MC 32 ; media changed
+%define UNC 64 ; uncorrectable media error
+%define BBK 128 ; bad block
+
+; status
+%define ERR 1 ; error occurred
+%define IDX 2 ; index, always set to 0
+%define CORR 4 ; corrected data, always set to 0
+%define DRQ 8 ; data request
+%define SRV 16 ; overlapped mode service request
+%define DF 32 ; drive fault (does not set ERR)
+%define RDY 64 ; ready
+%define BSY 128 ; busy
+
+
+read_blocks: ; args: lba, count, buf
+    ; todo, wrap READ_SECTOR(S)
     ret
 
 protected_mode:
