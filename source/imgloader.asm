@@ -22,7 +22,7 @@ org 0x8000 ; start just after boot sector
 %define e820_UNUSABLE 5 ; bad memory
 %define SMAP 0x534d4150
 
-; very slightly increases binary size compared to db because it uses a jmp,
+; very slightly increases binary size compared to db because it uses a jmp (more specifically, adds 2 bytes on most strings),
 ; but we have 32KB of code space here, so it's not really an issue for the convenience
 %macro lstr 2+
     jmp %%skip
@@ -268,9 +268,10 @@ print_mmap: ; no args
 
     ret
 
-; todo: implement basic disk driver with read_blocks(lba, count, buf) and write_blocks(lba, count, buf) functions,
-; our emulated disk is an ATA drive, don't try to support anything else, use ATA PIO mode (slow af but easier to implement),
-; besides, I'm trying to write a language runtime more than I am an OS, so I don't care about having good drivers as much
+read_blocks:
+        ; todo: implement basic temporary disk driver with read_blocks(lba, count, buf) function,
+        ; our emulated disk is an ATA drive, don't try to support anything else, use ATA PIO Mode (slow but easier to implement)
+    ret
 
 protected_mode:
     ; by now we should be in protected mode with flat segmentation, BIOS functions will no longer work
@@ -286,6 +287,9 @@ protected_mode:
     mov esp, 0x7c00
 
     lstr eax, `Entered protected mode.\r\n`
+    call serial_puts32
+
+    lstr eax, `Printing memory map:\r\n`
     call serial_puts32
 
     call print_mmap
