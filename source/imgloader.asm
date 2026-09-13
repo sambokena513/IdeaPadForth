@@ -39,8 +39,8 @@ align 16
 
 ; this should be at 0x8010
 start:
-    ; at this point cs, ds, es, and ss should be zeroed, and all interrupts should be disabled
-    call serial_init
+    ; at this point cs, ds, es, and ss should be zeroed, and all interrupts should be disabled,
+    ; serial output should also be initialized by the MBR bootstrap
 
     lstr ax, `Starting. \r\n`
     call serial_puts16
@@ -103,38 +103,6 @@ fatal16:
         jmp .hang
 
 COM1 equ 0x3f8
-serial_init:
-    ; disable interrupts
-    mov dx, COM1 + 1
-    mov al, 0
-    out dx, al
-
-    ; enable DLAB, st baud divisor to 3 = 38400 baud
-    mov dx, COM1 + 3
-    mov al, 0x80
-    out dx, al
-
-    mov dx, COM1 + 0
-    mov al, 3
-    out dx, al
-
-    ; 8 bits, no parity, 1 stop bit
-    mov dx, COM1 + 3
-    mov al, 0x03
-    out dx, al
-
-    ; enable FIFO, clear them, 14-byte threshold
-    mov dx, COM1 + 2
-    mov al, 0xc7
-    out dx, al
-
-    ; IRQs disabled, RST/DSR set
-    mov dx, COM1 + 4
-    mov al, 0x03
-    out dx, al
-
-    ret
-
 serial_putc16: ; args: al (char) | clobbers: dx
     push ax
 
@@ -267,6 +235,81 @@ print_mmap: ; no args
 
     ret
 
+protected_mode:
+    ; by now we should be in protected mode with flat segmentation, BIOS functions will no longer work
+
+    ; initialize segment registers
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
+    mov ss, ax
+
+    ; we already set sp in stage 1 but we need to make sure
+    ; it's sane again since we switched memory models
+    mov esp, 0x7c00
+
+    lstr eax, `Entered protected mode.\r\n`
+    call serial_puts32
+
+    lstr eax, `Printing memory map:\r\n`
+    call serial_puts32
+
+    call print_mmap
+
+    ; todo: set up page tables with identity mapping, and enter long mode
+
+    .hang: ; placeholder, when paging is done this'll be a far jump into our long mode code
+    hlt
+    jmp .hang
+
+bits 64 ; long mode code
+
+fatal64:
+    lstr rax, `Fatal error, hanging.\r\n`
+    call serial_puts64
+    .hang:
+        hlt
+        jmp .hang
+
+serial_putc64: ; args: char
+    push rax
+
+    .wait:
+        mov dx, COM1 + 5
+        in al, dx
+        test al, 0x20
+        jz .wait
+
+        pop rax
+        mov dx, COM1 + 0
+        out dx, al
+        ret
+
+serial_puts64: ; args: strptr
+    mov rbx, rax
+    .loop:
+    mov al, [rbx]
+    test al, al
+    jz .end
+    call serial_putc64
+    inc rbx
+    jmp .loop
+    .end:
+    ret
+
+serial_puth64: ; args: number
+    mov rbx, rax
+    mov rcx, 8
+    .loop:
+        rol rbx, 4
+        mov rdx, rbx
+        and rdx, 0xf
+
+        mov al, [hexchars + rdx]
+        call serial_putc64
+        loop .loop
+    ret
+
 ; port IO helpers, since this is a temporary driver and we're explicitly not trying to support new hardware, we can hardcode these numbers
 %define ATA_pBASE 0x1f0
 
@@ -313,30 +356,11 @@ read_blocks: ; args: lba, count, buf
     ; todo, wrap READ_SECTOR(S)
     ret
 
-protected_mode:
-    ; by now we should be in protected mode with flat segmentation, BIOS functions will no longer work
+long_mode:
+    lstr rax, "Entered long mode.\r\n"
+    call serial_puts32 ; can still run 32-bit code
 
-    ; initialize segment registers
-    mov ax, 0x10
-    mov ds, ax
-    mov es, ax
-    mov ss, ax
-
-    ; we already set sp in stage 1 but we need to make sure
-    ; it's sane again since we switched memory models
-    mov esp, 0x7c00
-
-    lstr eax, `Entered protected mode.\r\n`
-    call serial_puts32
-
-    lstr eax, `Printing memory map:\r\n`
-    call serial_puts32
-
-    call print_mmap
-
-    ; todo: read image into memory with read_blocks(),
-    ; and jump to image entry point
-    ; img will then set up interrupts and handle entering long mode,
+    ; todo: load and enter image
 
 hang:
     hlt

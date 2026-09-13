@@ -20,9 +20,13 @@ start:
     mov ds, ax
     mov sp, 0x7c00 ; stack grows downwards from our bootstrap code
 
+    mov [drive], dl
+
+    call serial_init
+
     ; print message so user knows their BIOS loaded the bootloader succesfully
     lea ax, [startmsg]
-    call putstr
+    call serial_puts16
 
     clc
     ; get available low memory, stage 2 later does
@@ -57,9 +61,10 @@ start:
 
     .a20_activated:
     lea ax, [a20msg]
-    call putstr
+    call serial_puts16
 
     ; check if EDD is supported
+    mov dl, [drive]
     mov ah, 0x41
     mov bx, 0x55aa
     int 0x13
@@ -68,8 +73,9 @@ start:
     test cx, 1 ; first bit should be set if LBA addressing is supported
     jz fatal ; we don't deal with CHS since every BIOS since the 90s supports LBA, so we just fail here
 
+    mov dl, [drive]
     mov si, DAPS
-    mov ah, 0x42 ; note that we don't set dl here since BIOS starts our code with DL = the drive being booted
+    mov ah, 0x42
     int 0x13
     jc fatal
 
@@ -92,7 +98,7 @@ start:
 
     .handoff:
     lea ax, [endmsg]
-    call putstr
+    call serial_puts16
     ; jmp to the start of the stage 2 code,
     ; +16 bytes because of the single-byte length header,
     ; and then padding to ensure stage 2 starts at a 16-byte aligned address
@@ -106,21 +112,67 @@ hang:
 ; so we just make sure we don't corrupt anything by continuing execution
 fatal:
     lea ax, [errmsg]
-    call putstr
+    call serial_puts16
     jmp hang
 
-putstr: ; args: strptr (in ax)
+COM1 equ 0x3f8
+serial_init:
+    ; disable interrupts
+    mov dx, COM1 + 1
+    mov al, 0
+    out dx, al
+
+    ; enable DLAB, st baud divisor to 3 = 38400 baud
+    mov dx, COM1 + 3
+    mov al, 0x80
+    out dx, al
+
+    mov dx, COM1 + 0
+    mov al, 3
+    out dx, al
+
+    ; 8 bits, no parity, 1 stop bit
+    mov dx, COM1 + 3
+    mov al, 0x03
+    out dx, al
+
+    ; enable FIFO, clear them, 14-byte threshold
+    mov dx, COM1 + 2
+    mov al, 0xc7
+    out dx, al
+
+    ; IRQs disabled, RST/DSR set
+    mov dx, COM1 + 4
+    mov al, 0x03
+    out dx, al
+
+    ret
+
+serial_putc16: ; args: al (char) | clobbers: dx
+    push ax
+
+    .wait:
+        mov dx, COM1 + 5
+        in al, dx
+        test al, 0x20
+        jz .wait
+
+        pop ax
+        mov dx, COM1 + 0
+        out dx, al
+        ret
+
+serial_puts16: ; args: ax (strptr) | clobbers: dx, bx
     mov bx, ax
     .loop:
-        mov al, [bx]
-        cmp al, 0
-        jne .char
-        ret
-    .char:
-        mov ah, 0x0e ; teletype
-        int 0x10 ; graphics interrupt
-        inc bx
-        jmp .loop
+    mov al, [bx]
+    test al, al
+    jz .end
+    call serial_putc16
+    inc bx
+    jmp .loop
+    .end:
+    ret
 
 align 4
 DAPS: ; disk address packet structure
@@ -129,7 +181,8 @@ DAPS_sector_count dw 0x0001 ; number of sectors to transfer
 DAPS_buffer dw 0x8000, 0x0000 ; offset, segment; buffer to read into
 DAPS_lbaaddr dq 1 ; lba address of first sector to read
 
-startmsg db "MBR Bootstrap code started.", 13, 10, 0
+drive db 0
+startmsg db "Serial port initialized.", 13, 10, 0
 errmsg db "Fatal error, hanging.", 13, 10, 0
 a20msg db "A20 gate enabled.", 13, 10, 0
 endmsg db "Succesfully read stage 2 from disk, entering stage 2", 13, 10, 0
