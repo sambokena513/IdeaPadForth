@@ -235,6 +235,39 @@ print_mmap: ; no args
 
     ret
 
+; "bootloader allocate" - Allocate <size> bytes aligned to an at least
+; <alignment>-byte boundary (must be a power of 2), reserving the allocated memory
+; as an e820 entry of type <type>.
+; Returns the address of the aligned allocation and the address of the new entry,
+; or NULL and NULL for failure.
+
+; Performance is O(n), and will fail if allocation causes the e820_arr to to exceed 255 entries,
+; this function is intended for being called a few times when reserving memory for page tables or
+; when loading a kernel/forth image, not for general-purpose allocation, as such, there is no equivalent bfree,
+; the kernel or image loaded from disk is responsible for managing physical memory later.
+
+; Note that the new entry's ADDRESS field may not necessarily be the same as the pointer returned by balloc,
+; because of it returning an aligned pointer, this means the new entry may have some extra bytes at the
+; start before the logical start of allocated memory.
+; As such, if you need a stable identity for the entry then either use the returned entry address here,
+; or ensure no overlapping entries and then do a linear search for a range containing the address.
+
+; 32-bit version of balloc, skips entries with an address or length with non-zero upper 32 bits, cannot allocate more than 4GB of memory
+; or return a pointer over 4GB
+balloc32: ; args: size, type, alignment
+
+    ; todo: if e820_arr length is 254, fail
+
+    ; todo: loop through e820_arr to find a type 1 entry long enough to satisfy the allocation once its start is rounded up to be aligned
+
+        ; todo: after finding a suitable entry, if its length is enough to *exactly* satisfy allocation, change its type to <type> and just
+        ;       return a pointer to this memory
+        ;       else: split it and append new entry, return pointer to that entry and its memory
+
+    ; todo: if loop ended naturally without an early return, fail
+
+    ret
+
 protected_mode:
     ; by now we should be in protected mode with flat segmentation, BIOS functions will no longer work
 
