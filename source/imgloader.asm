@@ -294,23 +294,37 @@ balloc32: ; args: size, type, alignment
         cmp eax, [e820_arr + ecx + e820_base_offset]
         jb .skip
 
-        
-        ; todo: loop through e820_arr to find a type 1 entry long enough to satisfy the allocation once its start is rounded up to be aligned
+        ; get aligned base by doing `eax = (base + (alignment - 1)) & ~(alignment - 1)`
+        mov ebx, edi
+        not ebx
+        mov eax, [e820_arr + ecx + e820_base_offset]
+        add eax, edi
+        and eax, ebx
 
-            ; todo: after finding a suitable entry, if its length is enough to *exactly* satisfy allocation, change its type to <type> and just
-            ;       return a pointer to this memory
-            ;       else: split it and append new entry, return pointer to that entry and its memory
+        ; edx now has the post-alignment length of the entry, eax still has the aligned start
+        mov ebx, eax
+        sub ebx, [e820_arr + ecx + e820_base_offset]
+        mov edx, [e820_arr + ecx + e820_length_offset]
+        sub edx, ebx
+
+        ; reject entries too short to satisfy allocation
+        cmp edx, esi
+        jb .skip
+        
+        ; todo: after finding a suitable entry, if its length is enough to *exactly* satisfy allocation, change its type to <type> and just
+        ;       return a pointer to this memory
+        ;       else: split it and append new entry, return pointer to that entry and its memory
 
         ; placeholder
         sreg ecx
-        lstr eax, `Valid entry.\r\n`
+        call serial_puth32
+        lstr eax, `\r\n`
         call serial_puts32
         rreg ecx
 
         .skip:
         add ecx, 20
         jmp .loop
-
 
     .fail:
     mov eax, 0
@@ -340,8 +354,9 @@ protected_mode:
 
     call print_mmap
 
-    mov eax, 16384
-    mov ebx, 4096
+    ; placeholder for testing balloc
+    mov eax, 16777216 ; 4096 pages
+    mov ebx, 4096 ; page-aligned
     mov ecx, 6
     call balloc32
 
