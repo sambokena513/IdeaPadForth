@@ -32,6 +32,20 @@ org 0x8000 ; start just after boot sector
     lea %1,%%string
 %endmacro
 
+%macro sreg 1-*
+    %rep %0
+        push %1
+        %rotate 1
+    %endrep
+%endmacro
+
+%macro rreg 1-*
+    %rep %0
+        %rotate -1
+        pop %1
+    %endrep
+%endmacro
+
 ; number of sectors the stage 1 loader should read before jumping here
 db (end - $$ + 511) / 512
 boot_drive db 0
@@ -252,20 +266,57 @@ print_mmap: ; no args
 ; As such, if you need a stable identity for the entry then either use the returned entry address here,
 ; or ensure no overlapping entries and then do a linear search for a range containing the address.
 
-; 32-bit version of balloc, skips entries with an address or length with non-zero upper 32 bits, cannot allocate more than 4GB of memory
+; 32-bit version of balloc, skips entries outside the 32-bit address space, cannot allocate more than 4GB of memory
 ; or return a pointer over 4GB
 balloc32: ; args: size, type, alignment
+    sreg esi, edi, ebp
 
-    ; todo: if e820_arr length is 254, fail
+    ; set up args
+    mov esi, eax
+    mov edi, ebx
+    sub edi, 1 ; subtract here to make it a bit easier to align later
+    mov ebp, ecx
 
-    ; todo: loop through e820_arr to find a type 1 entry long enough to satisfy the allocation once its start is rounded up to be aligned
+    xor ecx, ecx
+    .loop:
+        movzx eax, byte [e820_arr_len]
+        mov dx, 20
+        mul dx
+        cmp ecx, eax
+        je .fail ; if loop ends without early return, we could not allocate memory
 
-        ; todo: after finding a suitable entry, if its length is enough to *exactly* satisfy allocation, change its type to <type> and just
-        ;       return a pointer to this memory
-        ;       else: split it and append new entry, return pointer to that entry and its memory
+        ; only allocate from usable RAM
+        cmp dword [e820_arr + ecx + e820_type_offset], e820_USABLE
+        jne .skip
+        ; only allocate from memory within the 4GB address space
+        mov eax, [e820_arr + ecx + e820_base_offset]
+        add eax, [e820_arr + ecx + e820_length_offset]
+        cmp eax, [e820_arr + ecx + e820_base_offset]
+        jb .skip
 
-    ; todo: if loop ended naturally without an early return, fail
+        
+        ; todo: loop through e820_arr to find a type 1 entry long enough to satisfy the allocation once its start is rounded up to be aligned
 
+            ; todo: after finding a suitable entry, if its length is enough to *exactly* satisfy allocation, change its type to <type> and just
+            ;       return a pointer to this memory
+            ;       else: split it and append new entry, return pointer to that entry and its memory
+
+        ; placeholder
+        sreg ecx
+        lstr eax, `Valid entry.\r\n`
+        call serial_puts32
+        rreg ecx
+
+        .skip:
+        add ecx, 20
+        jmp .loop
+
+
+    .fail:
+    mov eax, 0
+    mov ebx, 0
+    .end:
+    rreg esi, edi, ebp
     ret
 
 protected_mode:
@@ -288,6 +339,11 @@ protected_mode:
     call serial_puts32
 
     call print_mmap
+
+    mov eax, 16384
+    mov ebx, 4096
+    mov ecx, 6
+    call balloc32
 
     ; todo: set up page tables with identity mapping, and enter long mode
 
