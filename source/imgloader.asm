@@ -268,7 +268,7 @@ print_mmap: ; no args
 
 ; 32-bit version of balloc, skips entries outside the 32-bit address space, cannot allocate more than 4GB of memory
 ; or return a pointer over 4GB
-balloc32: ; args: size, type, alignment
+balloc32: ; args: size, alignment, type
     sreg esi, edi, ebp
 
     ; set up args
@@ -310,17 +310,31 @@ balloc32: ; args: size, type, alignment
         ; reject entries too short to satisfy allocation
         cmp edx, esi
         jb .skip
-        
-        ; todo: after finding a suitable entry, if its length is enough to *exactly* satisfy allocation, change its type to <type> and just
-        ;       return a pointer to this memory
-        ;       else: split it and append new entry, return pointer to that entry and its memory
+        jne .split
 
-        ; placeholder
-        sreg ecx
-        call serial_puth32
-        lstr eax, `\r\n`
-        call serial_puts32
-        rreg ecx
+        ; if exact match, just change the type and return this entry
+        mov [e820_arr + ecx + e820_type_offset], ebp
+        lea ebx, [e820_arr + ecx]
+        jmp .end
+
+        ; split from start and append new entry, return new entry
+        .split:
+        
+        %ifdef DEBUG
+            sreg eax, ebx, ecx, edx
+            call serial_puth32
+            lstr eax, `\r\n`
+            call serial_puts32
+            mov eax, esi
+            call serial_puth32
+            lstr eax, `\r\n`
+            call serial_puts32
+            rreg eax, ebx, ecx, edx
+        %endif
+
+        ; todo: new start for the entry being split from should be eax + esi, and new length edx - esi
+        ;       new entry should have start [e820_arr + ecx + e820_base_offset], and length esi
+        ;       and be positioned at [e820_arr_len] * 20, afterwards, [e820_arr_len] should be incremented
 
         .skip:
         add ecx, 20
