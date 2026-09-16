@@ -249,7 +249,7 @@ print_mmap: ; no args
 
     ret
 
-; "bootloader allocate" - Allocate <size> bytes aligned to an at least
+; "bootloader allocate" (size, alignment, type) - Allocate <size> bytes aligned to an at least
 ; <alignment>-byte boundary (must be a power of 2), reserving the allocated memory
 ; as an e820 entry of type <type>.
 ; Returns the address of the aligned allocation and the address of the new entry,
@@ -319,8 +319,13 @@ balloc32: ; args: size, alignment, type
 
         ; split from start and append new entry, return new entry
         .split:
-        
+
+        ; fail if we can't append a new entry for the split-off chunk
+        cmp byte [e820_arr_len], 255
+        je .fail
+
         %ifdef DEBUG
+            ; print entry start, and amount to allocate
             sreg eax, ebx, ecx, edx
             call serial_puth32
             lstr eax, `\r\n`
@@ -332,9 +337,48 @@ balloc32: ; args: size, alignment, type
             rreg eax, ebx, ecx, edx
         %endif
 
-        ; todo: new start for the entry being split from should be eax + esi, and new length edx - esi
-        ;       new entry should have start [e820_arr + ecx + e820_base_offset], and length esi
-        ;       and be positioned at [e820_arr_len] * 20, afterwards, [e820_arr_len] should be incremented
+        ; ebx is now the pointer to the new entry we're appending
+        sreg eax, edx
+        movzx eax, byte [e820_arr_len]
+        mov dx, 20
+        mul dx
+        lea ebx, [e820_arr + eax]
+        rreg eax, edx
+
+        %ifdef DEBUG
+            ; print new entry pointer
+            sreg eax, ebx, ecx, edx
+            mov eax, ebx
+            call serial_puth32
+            lstr eax, `\r\n`
+            call serial_puts32
+            rreg eax, ebx, ecx, edx
+        %endif
+
+        ; shorten entry we're splitting from, putting its original start in edi
+        mov edi, eax
+        xchg edi, [e820_arr + ecx + e820_base_offset]
+        mov [e820_arr + ecx + e820_length_offset], edx
+        add [e820_arr + ecx + e820_base_offset], esi
+        sub [e820_arr + ecx + e820_length_offset], esi
+
+        ; set up new entry
+        mov [ebx + e820_base_offset], edi
+        mov dword [ebx + e820_base_offset + 4], 0
+        mov dword [ebx + e820_length_offset + 4], 0
+        mov [ebx + e820_type_offset], ebp
+
+        ; now that we're done with splitting, we can use ecx to avoid having to spill eax to memory
+        mov ecx, eax
+
+        ; finish new entry be setting its length to (parent_base_aligned - parent_base) + allocation_size
+        sub ecx, edi
+        add ecx, esi
+        mov [ebx + e820_length_offset], ecx
+
+        ; finally, return
+        inc byte [e820_arr_len]
+        jmp .end
 
         .skip:
         add ecx, 20
@@ -373,6 +417,8 @@ protected_mode:
     mov ebx, 4096 ; page-aligned
     mov ecx, 6
     call balloc32
+
+    call print_mmap
 
     ; todo: set up page tables with identity mapping, and enter long mode
 
