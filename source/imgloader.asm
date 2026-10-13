@@ -266,9 +266,7 @@ print_mmap: ; no args
 ; As such, if you need a stable identity for the entry then either use the returned entry address here,
 ; or ensure no overlapping entries and then do a linear search for a range containing the address.
 
-; 32-bit version of balloc, skips entries outside the 32-bit address space, cannot allocate more than 4GB of memory
-; or return a pointer over 4GB
-balloc32: ; args: size, alignment, type
+balloc: ; args: size, alignment, type
     sreg esi, edi, ebp
 
     ; set up args
@@ -391,89 +389,6 @@ balloc32: ; args: size, alignment, type
     rreg esi, edi, ebp
     ret
 
-protected_mode:
-    ; by now we should be in protected mode with flat segmentation, BIOS functions will no longer work
-
-    ; initialize segment registers
-    mov ax, 0x10
-    mov ds, ax
-    mov es, ax
-    mov ss, ax
-
-    ; we already set sp in stage 1 but we need to make sure
-    ; it's sane again since we switched memory models
-    mov esp, 0x7c00
-
-    lstr eax, `Entered protected mode.\r\n`
-    call serial_puts32
-
-    lstr eax, `Printing memory map:\r\n`
-    call serial_puts32
-
-    call print_mmap
-
-    ; placeholder for testing balloc
-    mov eax, 16777216 ; 4096 pages
-    mov ebx, 4096 ; page-aligned
-    mov ecx, 6
-    call balloc32
-
-    call print_mmap
-
-    ; todo: set up page tables with identity mapping, and enter long mode
-
-    .hang: ; placeholder, when paging is done this'll be a far jump into our long mode code
-    hlt
-    jmp .hang
-
-bits 64 ; long mode code
-
-fatal64:
-    lstr rax, `Fatal error, hanging.\r\n`
-    call serial_puts64
-    .hang:
-        hlt
-        jmp .hang
-
-serial_putc64: ; args: char
-    push rax
-
-    .wait:
-        mov dx, COM1 + 5
-        in al, dx
-        test al, 0x20
-        jz .wait
-
-        pop rax
-        mov dx, COM1 + 0
-        out dx, al
-        ret
-
-serial_puts64: ; args: strptr
-    mov rbx, rax
-    .loop:
-    mov al, [rbx]
-    test al, al
-    jz .end
-    call serial_putc64
-    inc rbx
-    jmp .loop
-    .end:
-    ret
-
-serial_puth64: ; args: number
-    mov rbx, rax
-    mov rcx, 8
-    .loop:
-        rol rbx, 4
-        mov rdx, rbx
-        and rdx, 0xf
-
-        mov al, [hexchars + rdx]
-        call serial_putc64
-        loop .loop
-    ret
-
 ; port IO helpers, since this is a temporary driver and we're explicitly not trying to support new hardware, we can hardcode these numbers
 %define ATA_pBASE 0x1f0
 
@@ -520,15 +435,32 @@ read_blocks: ; args: lba, count, buf
     ; todo, wrap READ_SECTOR(S)
     ret
 
-long_mode:
-    lstr rax, "Entered long mode.\r\n"
-    call serial_puts32 ; can still run 32-bit code
+protected_mode:
+    ; by now we should be in protected mode with flat segmentation, BIOS functions will no longer work
 
-    ; todo: load and enter image
+    ; initialize segment registers
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
+    mov ss, ax
 
-hang:
+    ; we already set sp in stage 1 but we need to make sure
+    ; it's sane again since we switched memory models
+    mov esp, 0x7c00
+
+    lstr eax, `Entered protected mode.\r\n`
+    call serial_puts32
+
+    lstr eax, `Printing memory map:\r\n`
+    call serial_puts32
+
+    call print_mmap
+
+    ; todo: read image into memory, and enter it
+
+    .hang: ; placeholder, when paging is done this'll be a far jump into our long mode code
     hlt
-    jmp hang
+    jmp .hang
 
 gdt:
     dq 0 ; must be null

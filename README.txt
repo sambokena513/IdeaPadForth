@@ -60,19 +60,24 @@ Basic design:
             and CALL IR instructions, emitting this code for each:
 
                 LIT:
-                    mov [r14], imm64
-                    add r14, 8
+                    mov [ebp], imm32
+                    add ebp, 8
 
                 0BRANCH:
-                    sub r14, 8
-                    cmp [r14], 0
+                    sub ebp, 8
+                    cmp [ebp], 0
                     je rel32
 
                 BRANCH:
                     jmp rel32
 
                 CALL:
-                    call [r15 + WORD_DESC + WD_IMPL]
+                    call [edi + 8*WORD_DESC + WD_IMPL]
+                    (Note here, word descriptors have to be 8 bytes,
+                     1 pointer for the impl and another for an extended
+                     word struct, because otherwise we'd need more than
+                     one instruction to perform this indirect call,
+                     which'd rapidly inflate code size.)
 
     Parallelism/Concurrency:
         Not built-in, though the planned library-level implementations are
@@ -128,8 +133,11 @@ Image Loading:
 
     With this processor state:
 
-        - r15 == [0x7c10]
-        - Long mode with paging (identity-mapped) enabled.
+        - edi = [0x7c10] (word desc table)
+        - ebp = top of data stack
+        - protected mode with flat segmentation and no paging
+        - an initial main-context data and return stack, each being at least
+          4KB large
 
     Therefore, an image loader must do at least these things:
 
@@ -143,7 +151,7 @@ Image Loading:
         - Parse the rest of the image header and based on that read different
           sector ranges into memory.
         - Allocate memory for, and put runtime pointers into image header for,
-          all of the image's persistent data structures, and ensure r15 gets
+          all of the image's persistent data structures, and ensure edi gets
           the runtime pointer for the word descriptor table.
         - Fix image-start-relative pointers for persistent data structures.
         - Jump to image entry point.
