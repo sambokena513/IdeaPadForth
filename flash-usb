@@ -1,0 +1,9 @@
+#!/usr/bin/bash
+
+if [ "$#" -ne 1 ]; then
+    echo "Got $# args: $@"
+    echo "Usage: flash-usb <block-device>"
+    exit 1
+fi
+
+sudo dd if=./artefacts/disk.bin of="$1" count=128 status=progress

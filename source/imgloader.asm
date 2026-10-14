@@ -46,6 +46,24 @@ org 0x8000 ; start just after boot sector
     %endrep
 %endmacro
 
+%macro VGA_MARK16 1
+    %ifdef DEBUG
+        sreg ax
+        mov ax, 0xb800
+        mov es, ax
+        mov word [es:0], 0x0f40 + %1
+        xor ax, ax
+        mov es, ax
+        rreg ax
+    %endif
+%endmacro
+
+%macro VGA_MARK32 1
+    %ifdef DEBUG
+        mov word [0xb8000], 0x0f40 + %1
+    %endif
+%endmacro
+
 ; number of sectors the stage 1 loader should read before jumping here
 db (end - $$ + 511) / 512
 boot_drive db 0
@@ -59,7 +77,11 @@ start:
     lstr ax, `Starting. \r\n`
     call serial_puts16
 
+    VGA_MARK16 1
+
     call get_mmap
+
+    VGA_MARK16 2
 
     lgdt [gdtr]
     mov eax, cr0
@@ -83,6 +105,8 @@ get_mmap:
     jne fatal16
     cmp cl, 20 ; a bit paranoid
     jne fatal16
+    cmp ebx, 0
+    je .end
 
     ; first iter setup
     add byte [e820_arr_len], 1
@@ -103,6 +127,8 @@ get_mmap:
         add di, 20
         jmp .loop
     .end:
+
+    add byte [e820_arr_len], 1
 
     lstr ax, `Finished detecting memory.\r\n`
     call serial_puts16
@@ -438,6 +464,8 @@ read_blocks: ; args: lba, count, buf
 protected_mode:
     ; by now we should be in protected mode with flat segmentation, BIOS functions will no longer work
 
+    VGA_MARK32 3
+
     ; initialize segment registers
     mov ax, 0x10
     mov ds, ax
@@ -448,13 +476,19 @@ protected_mode:
     ; it's sane again since we switched memory models
     mov esp, 0x7c00
 
+    VGA_MARK32 4
+
     lstr eax, `Entered protected mode.\r\n`
     call serial_puts32
 
     lstr eax, `Printing memory map:\r\n`
     call serial_puts32
 
+    VGA_MARK32 5
+
     call print_mmap
+
+    VGA_MARK32 6
 
     ; todo: read image into memory, and enter it
 
