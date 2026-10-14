@@ -79,9 +79,9 @@ org 0x8000 ; start just after boot sector
 %macro HANG32 0
         %%hang:
         %ifdef DEBUG
-            VGA_MARK32 10
-            VGA_MARK32 11
-            VGA_MARK32 12
+            VGA_MARK32 20
+            VGA_MARK32 21
+            VGA_MARK32 22
         %else
             hlt
         %endif
@@ -107,6 +107,7 @@ start:
 
     VGA_MARK16 2
 
+    cli ; clear interrupts a second time just in case one of the BIOS functions turned them back on
     lgdt [gdtr]
     mov eax, cr0
     or eax, 1 ; CR0.PE
@@ -512,6 +513,7 @@ protected_mode:
 
     HANG32
 
+align 8
 gdt:
     dq 0 ; must be null
 
