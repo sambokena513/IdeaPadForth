@@ -411,7 +411,7 @@ balloc: ; args: size, alignment, type
 %define ATA_pDRIVE_ADDR ATA_pCTL_BASE + 1
 
 ; errors
-%define ATA_MNF 1 ; address mark not found
+%define ATA_AMNF 1 ; address mark not found
 %define TKZNF 2 ; track zero not found
 %define ABRT 4 ; aborted
 %define MCR 8 ; media change request

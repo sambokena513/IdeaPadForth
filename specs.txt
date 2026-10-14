@@ -1,0 +1,7 @@
+BIOS - Phoenix TrustedCore(tm) 4329A11 Version 14CN88WW
+CPU - Intel(R) Atom(TM) CPU N270 1.60GHz
+System Memory - 640KB
+Extended Memory - 1014MB
+SATA HDD - ST9500423AS-(S1)
+SSD Disk - None
+Disk operating mode - IDE
