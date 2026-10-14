@@ -1,3 +1,11 @@
 #!/usr/bin/bash
 
-qemu-system-x86_64 -M q35 -display gtk -serial stdio -drive file=artefacts/disk.bin,format=raw,if=ide
+qemu-system-i386 \
+    -machine pc-i440fx-10.2 \
+    -cpu n270 \
+    -smp 1 \
+    -m 1024 \
+    -display gtk \
+    -serial stdio \
+    -drive file=artefacts/disk.bin,format=raw,if=ide \
+    -boot order=c
