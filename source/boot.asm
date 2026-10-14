@@ -22,11 +22,14 @@ start:
 
     mov [drive], dl
 
+    ; initialize serial port so that the stage two bootloader and later the kernel
+    ; can do debug logs, note that these are not meant to be user-visible messages,
+    ; which is why we use bios "teletype" instead for the messages here
     call serial_init
 
     ; print message so user knows their BIOS loaded the bootloader succesfully
     lea ax, [startmsg]
-    call serial_puts16
+    call bios_puts
 
     clc
     ; get available low memory, stage 2 later does
@@ -61,7 +64,7 @@ start:
 
     .a20_activated:
     lea ax, [a20msg]
-    call serial_puts16
+    call bios_puts
 
     ; check if EDD is supported
     mov dl, [drive]
@@ -98,7 +101,7 @@ start:
 
     .handoff:
     lea ax, [endmsg]
-    call serial_puts16
+    call bios_puts
     ; jmp to the start of the stage 2 code,
     ; +16 bytes because of the single-byte length header,
     ; and then padding to ensure stage 2 starts at a 16-byte aligned address
@@ -112,7 +115,7 @@ hang:
 ; so we just make sure we don't corrupt anything by continuing execution
 fatal:
     lea ax, [errmsg]
-    call serial_puts16
+    call bios_puts
     jmp hang
 
 COM1 equ 0x3f8
@@ -148,27 +151,22 @@ serial_init:
 
     ret
 
-serial_putc16: ; args: al (char) | clobbers: dx
-    push ax
+bios_putc: ; args: al (char)
+    push bx
+    mov ah, 0x0e
+    xor bx, bx
+    mov bl, 0x07
+    int 0x10
+    pop bx
+    ret
 
-    .wait:
-        mov dx, COM1 + 5
-        in al, dx
-        test al, 0x20
-        jz .wait
-
-        pop ax
-        mov dx, COM1 + 0
-        out dx, al
-        ret
-
-serial_puts16: ; args: ax (strptr) | clobbers: dx, bx
+bios_puts: ; args: ax (strptr) | clobbers: bx
     mov bx, ax
     .loop:
     mov al, [bx]
     test al, al
     jz .end
-    call serial_putc16
+    call bios_putc
     inc bx
     jmp .loop
     .end:
