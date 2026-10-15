@@ -104,8 +104,8 @@ Basic design:
 
             And popping is:
 
-                mov tos, [stack]
                 sub stack, cell_size
+                mov tos, [stack]
 
             This means that a stack must be represented like:
                 [invalid_memory, dummy_cell, cell1, cell2, ..., celln] in
@@ -175,8 +175,7 @@ Image Loading:
 
         - Ensure the A20 line is enabled.
         - Get a memory map from BIOS.
-        - Enter protected mode, initialize page tables,
-          and enter long mode.
+        - Enter protected mode.
         - Read the sector at LBA 128 into 0x7c00, overwriting the MBR
           bootstrap code.
         - Put memory map start and size into the image header.
@@ -185,5 +184,6 @@ Image Loading:
         - Allocate memory for, and put runtime pointers into image header for,
           all of the image's persistent data structures, and ensure edi gets
           the runtime pointer for the word descriptor table.
+        - set up data and return stacks
         - Fix image-start-relative pointers for persistent data structures.
         - Jump to image entry point.
