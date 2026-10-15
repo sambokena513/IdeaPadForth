@@ -82,14 +82,14 @@ Basic design:
         Calling Convention:
             Function arguments and return values go through the data stack,
             where ebp always points to the first free memory address above the NOS,
-            and edi contains the cached TOS. This model makes passing
+            and esi contains the cached TOS. This model makes passing
             arguments simple as well as allows the initial compiler to not
             worry about register allocation at all, while not forcing too many
             unnecessary memory accesses.
 
             In other words:
 
-            edi = TOS
+            esi = TOS
             ebp = &NOS + 4
 
             Note that the stack pointer points to the first *free* cell, so in
