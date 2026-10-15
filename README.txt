@@ -79,11 +79,43 @@ Basic design:
                      one instruction to perform this indirect call,
                      which'd rapidly inflate code size.)
 
+        Calling Convention:
+            Function arguments and return values go through the data stack,
+            where ebp always points to the first free memory address above the NOS,
+            and edi contains the cached TOS. This model makes passing
+            arguments simple as well as allows the initial compiler to not
+            worry about register allocation at all, while not forcing too many
+            unnecessary memory accesses.
+
+            In other words:
+
+            edi = TOS
+            ebp = &NOS + 4
+
+            Note that the stack pointer points to the first *free* cell, so in
+            an empty stack that's the first cell.
+
+            Pushing a value to the stack is implemented as the following
+            logical operation:
+
+                mov [stack], tos
+                mov tos, val
+                add stack, cell_size
+
+            And popping is:
+
+                mov tos, [stack]
+                sub stack, cell_size
+
+            This means that a stack must be represented like:
+                [invalid_memory, dummy_cell, cell1, cell2, ..., celln] in
+                memory to guarantee correctness.
+                In other words, caching the TOS costs us 4 bytes per stack.
+            
+
     Parallelism/Concurrency:
-        Not built-in, though the planned library-level implementations are
-        cooperative multitasking similar to SmolForth for concurrency, and a DELEGATE
-        word for making a function run a different CPU core, along with basic mutex
-        wrappers in the stdlib.
+        Not built-in, though the planned library-level implementation is
+        cooperative multitasking similar to SmolForth for concurrency.
 
     Language semantics:
         See SmolForth at github.com/sambokena513/SmolForth, language semantics are

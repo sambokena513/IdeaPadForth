@@ -23,7 +23,7 @@ org 0x8000 ; start just after boot sector
 %define SMAP 0x534d4150
 
 ; very slightly increases binary size compared to db because it uses a jmp (more specifically, adds 2 bytes on most strings),
-; but we have 32KB of code space here, so it's not really an issue for the convenience
+; but we have 64KB of code space here, so it's not really an issue for the convenience
 %macro lstr 2+
     jmp %%skip
     %%string:
@@ -32,6 +32,7 @@ org 0x8000 ; start just after boot sector
     lea %1,%%string
 %endmacro
 
+; save n registers to stack
 %macro sreg 1-*
     %rep %0
         push %1
@@ -39,6 +40,7 @@ org 0x8000 ; start just after boot sector
     %endrep
 %endmacro
 
+; restore n registers
 %macro rreg 1-*
     %rep %0
         %rotate -1
@@ -46,6 +48,7 @@ org 0x8000 ; start just after boot sector
     %endrep
 %endmacro
 
+; put a character (offset from start of alphabet) into the top left corner of the screen
 %macro VGA_MARK16 1
     %ifdef DEBUG
         sreg ax
@@ -64,6 +67,7 @@ org 0x8000 ; start just after boot sector
     %endif
 %endmacro
 
+; hang forever
 %macro HANG16 0
         %%hang:
         %ifdef DEBUG
@@ -508,6 +512,8 @@ protected_mode:
     call print_mmap
 
     VGA_MARK32 5
+
+    ; todo: set up forth execution environment
 
     ; todo: read image into memory, and enter it
 
