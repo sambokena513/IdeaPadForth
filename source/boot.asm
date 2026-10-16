@@ -160,7 +160,8 @@ bios_putc: ; args: al (char)
     pop bx
     ret
 
-bios_puts: ; args: ax (strptr) | clobbers: bx
+bios_puts: ; args: ax (strptr)
+    push bx
     mov bx, ax
     .loop:
     mov al, [bx]
@@ -170,6 +171,7 @@ bios_puts: ; args: ax (strptr) | clobbers: bx
     inc bx
     jmp .loop
     .end:
+    pop bx
     ret
 
 align 4
@@ -183,7 +185,7 @@ drive db 0
 startmsg db "Serial port initialized.", 13, 10, 0
 errmsg db "Fatal error, hanging.", 13, 10, 0
 a20msg db "A20 gate enabled.", 13, 10, 0
-endmsg db "Succesfully read stage 2 from disk, entering stage 2", 13, 10, 0
+endmsg db "Succesfully read stage 2 from disk, entering stage 2.", 13, 10, 0
 ; leave partition table empty since we don't use partitioning
 times 64 db 0
 ; pad file to 512 bytes

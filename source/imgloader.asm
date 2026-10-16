@@ -92,6 +92,18 @@ org 0x8000 ; start just after boot sector
         jmp %%hang
 %endmacro
 
+; wait for a little bit
+%macro BUSYWAIT 0
+    sreg ax
+    ; just an arbitrary value I picked since it's slow enough on my processor
+    ; that I can read the output of operations as they're done
+    mov eax, 0x004fffff
+    %%wait:
+        dec eax
+        jnz %%wait
+    rreg ax
+%endmacro
+
 ; number of sectors the stage 1 loader should read before jumping here
 bootloader_sector_length db (end - $$ + 511) / 512
 boot_drive db 0
@@ -103,7 +115,7 @@ start:
     ; serial output should also be initialized by the MBR bootstrap
 
     lstr ax, `Starting. \r\n`
-    call serial_puts16
+    call bios_puts
 
     VGA_MARK16 1
 
@@ -121,7 +133,7 @@ start:
 
 get_mmap:
     lstr ax, `Detecting memory.\r\n`
-    call serial_puts16
+    call bios_puts
 
     lea di, [e820_arr]
     mov edx, SMAP
@@ -160,77 +172,132 @@ get_mmap:
     add byte [e820_arr_len], 1
 
     lstr ax, `Finished detecting memory.\r\n`
-    call serial_puts16
+    call bios_puts
 
     ret
 
 fatal16:
     lstr ax, `Fatal error, hanging.\r\n`
-    call serial_puts16
+    call bios_puts
     HANG16
 
-COM1 equ 0x3f8
-serial_putc16: ; args: al (char) | clobbers: dx
-    push ax
+bios_putc: ; args: al (char)
+    %ifdef DEBUG
+        BUSYWAIT
+    %endif
+    push bx
+    mov ah, 0x0e
+    xor bx, bx
+    mov bl, 0x07
+    int 0x10
+    pop bx
+    ret
 
-    .wait:
-        mov dx, COM1 + 5
-        in al, dx
-        test al, 0x20
-        jz .wait
-
-        pop ax
-        mov dx, COM1 + 0
-        out dx, al
-        ret
-
-serial_puts16: ; args: ax (strptr) | clobbers: dx, bx
+bios_puts: ; args: ax (strptr)
+    push bx
     mov bx, ax
     .loop:
     mov al, [bx]
     test al, al
     jz .end
-    call serial_putc16
+    call bios_putc
     inc bx
     jmp .loop
     .end:
+    pop bx
     ret
 
-; from now on this is protected-mode code
 bits 32
-
 fatal32:
     lstr eax, `Fatal error, hanging.\r\n`
-    call serial_puts32
+    call bios_puts32
     HANG32
 
-serial_putc32: ; args: char
-    push eax
+bits 16
+; "modeswitch argument buffer" used to pass arguments between real- and protected-mode code,
+; length is 4 for the 4 argument registers (e/ax, e/bx, e/cx, e/dx)
+MSAB times 4 dd 0
 
-    .wait:
-        mov dx, COM1 + 5
-        in al, dx
-        test al, 0x20
-        jz .wait
-
-        pop eax
-        mov dx, COM1 + 0
-        out dx, al
-        ret
-
-serial_puts32: ; args: strptr
-    mov ebx, eax
-    .loop:
-    mov al, [ebx]
-    test al, al
-    jz .end
-    call serial_putc32
-    inc ebx
-    jmp .loop
+; switch from real mode to protected mode,
+; note that both this and real_mode_switch are bootloader-only functions,
+; we don't implement anything like this in the forth image being loaded since that actually
+; has its own drivers, using BIOS there would be incredibly inefficient
+prot_mode_switch:
+    cli
+    mov eax, cr0
+    or eax, 1 ; CR0.PE
+    mov cr0, eax
+    jmp 0x08:.end
+bits 32
     .end:
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
+    mov ss, ax
+    mov fs, ax
+    mov gs, ax
+
+    ; shift return address down 2 bytes
+    o16 pop ax
+    and eax, 0xFFFF
+    push eax
     ret
 
-serial_puth32: ; args: number
+; switch from protected mode to real mode
+real_mode_switch:
+    cli
+    jmp 0x18:.pm16 ; intel says to not directly clear CR0.PE in a 32-bit segment
+bits 16
+    .pm16:
+    mov eax, cr0
+    and eax, 0xfffffffe
+    mov cr0, eax
+    jmp 0x0000:.end
+    .end:
+    xor ax, ax
+    mov ds, ax
+    mov es, ax
+    mov ss, ax
+    mov fs, ax
+    mov gs, ax
+
+    ; shift return address up 2 bytes
+    pop ax
+    add sp, 2
+    push ax
+    ret
+bits 32
+
+%macro REAL 0
+call real_mode_switch
+bits 16
+%endmacro
+
+%macro PROT 0
+call prot_mode_switch
+bits 32
+%endmacro
+
+; wrapper for invoking bios_putc in protected mode
+bios_putc32: ; args: al (char)
+    mov [MSAB], al
+    REAL
+    mov al, [MSAB]
+    call bios_putc
+    PROT
+    ret
+
+; wrapper for invoking bios_puts in protected mode
+bios_puts32: ; args: ax (strptr)
+    mov [MSAB], ax
+    REAL
+    mov ax, [MSAB]
+    call bios_puts
+    PROT
+    ret
+
+; print a 32-bit hexadecimal integer
+bios_puth32: ; args: number
     mov ebx, eax
     mov ecx, 8
     .loop:
@@ -239,7 +306,7 @@ serial_puth32: ; args: number
         and edx, 0xf
 
         mov al, [hexchars + edx]
-        call serial_putc32
+        call bios_putc32
         loop .loop
     ret
 
@@ -255,43 +322,43 @@ print_mmap: ; no args
         push ecx
 
         lstr eax, `----ENTRY----\r\n`
-        call serial_puts32
+        call bios_puts32
 
         ; address
         lstr eax, `ADDRESS = 0x`
-        call serial_puts32
+        call bios_puts32
         mov ecx, [esp]
         mov eax, [e820_arr + ecx + 4]
-        call serial_puth32
+        call bios_puth32
         mov ecx, [esp]
         mov eax, [e820_arr + ecx]
-        call serial_puth32
+        call bios_puth32
         lstr eax, `\r\n`
-        call serial_puts32
+        call bios_puts32
 
         ; length
         lstr eax, `LENGTH = 0x`
-        call serial_puts32
+        call bios_puts32
         mov ecx, [esp]
         mov eax, [e820_arr + ecx + 12]
-        call serial_puth32
+        call bios_puth32
         mov ecx, [esp]
         mov eax, [e820_arr + ecx + 8]
-        call serial_puth32
+        call bios_puth32
         lstr eax, `\r\n`
-        call serial_puts32
+        call bios_puts32
 
         ; type
         lstr eax, `TYPE = 0x`
-        call serial_puts32
+        call bios_puts32
         mov ecx, [esp]
         mov eax, [e820_arr + ecx + 16]
-        call serial_puth32
+        call bios_puth32
         lstr eax, `\r\n`
-        call serial_puts32
+        call bios_puts32
 
         lstr eax, `-----END-----\r\n`
-        call serial_puts32
+        call bios_puts32
 
         pop ecx
         add ecx, 20
@@ -376,13 +443,13 @@ balloc: ; args: size, alignment, type
         %ifdef DEBUG
             ; print entry start, and amount to allocate
             sreg eax, ebx, ecx, edx
-            call serial_puth32
+            call bios_puth32
             lstr eax, `\r\n`
-            call serial_puts32
+            call bios_puts32
             mov eax, esi
-            call serial_puth32
+            call bios_puth32
             lstr eax, `\r\n`
-            call serial_puts32
+            call bios_puts32
             rreg eax, ebx, ecx, edx
         %endif
 
@@ -398,9 +465,9 @@ balloc: ; args: size, alignment, type
             ; print new entry pointer
             sreg eax, ebx, ecx, edx
             mov eax, ebx
-            call serial_puth32
+            call bios_puth32
             lstr eax, `\r\n`
-            call serial_puts32
+            call bios_puts32
             rreg eax, ebx, ecx, edx
         %endif
 
@@ -440,52 +507,6 @@ balloc: ; args: size, alignment, type
     rreg esi, edi, ebp
     ret
 
-bits 16
-prot_mode_switch:
-    cli
-    mov eax, cr0
-    or eax, 1 ; CR0.PE
-    mov cr0, eax
-    jmp 0x08:.end
-bits 32
-    .end:
-    mov ax, 0x10
-    mov ds, ax
-    mov es, ax
-    mov ss, ax
-    mov fs, ax
-    mov gs, ax
-
-    ; shift return address down 2 bytes
-    o16 pop ax
-    and eax, 0xFFFF
-    push eax
-    ret
-
-real_mode_switch:
-    cli
-    jmp 0x18:.pm16 ; intel says to not directly clear CR0.PE in a 32-bit segment
-bits 16
-    .pm16:
-    mov eax, cr0
-    and eax, 0xfffffffe
-    mov cr0, eax
-    jmp 0x0000:.end
-    .end:
-    xor ax, ax
-    mov ds, ax
-    mov es, ax
-    mov ss, ax
-    mov fs, ax
-    mov gs, ax
-    VGA_MARK16 20
-
-    ; shift return address up 2 bytes
-    pop ax
-    add sp, 2
-    push ax
-    ret
-bits 32
 
 bits 16
 ; reads up to 32 sectors of boot disk using BIOS EDD
@@ -518,10 +539,6 @@ read_blocks: ; args: lba, count, buf
     call real_mode_switch
     bits 16
 
-    ; todo
-    lstr ax, `Hello, real mode!\r\n`
-    call serial_puts16
-
     call prot_mode_switch
     bits 32
     ret
@@ -544,10 +561,10 @@ protected_mode:
     VGA_MARK32 3
 
     lstr eax, `Entered protected mode.\r\n`
-    call serial_puts32
+    call bios_puts32
 
     lstr eax, `Printing memory map:\r\n`
-    call serial_puts32
+    call bios_puts32
 
     VGA_MARK32 4
 
@@ -569,10 +586,9 @@ protected_mode:
 
     ; todo: enter image
 
-    lstr eax, `THIS SHOULD NOT BE DISPLAYED.\r\n`
-    call serial_puts32
-    jmp $
-    ; HANG32
+    lstr eax, `Reached end of bootloader code, if you are seeing this, it means the image handoff failed.\r\n`
+    call bios_puts32
+    HANG32
 
 align 8
 gdt:
