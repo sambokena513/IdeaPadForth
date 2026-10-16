@@ -440,31 +440,6 @@ balloc: ; args: size, alignment, type
     rreg esi, edi, ebp
     ret
 
-
-bits 16
-; reads up to 32 sectors of boot disk using BIOS EDD
-read_blocks_bios: ; args: lba, count
-    mov [DAPS_lba], ax
-    mov [DAPS_sectors], bx
-
-    sreg si
-    lea si, [DAPS]
-    mov ah, 0x42
-    mov dl, [boot_drive]
-    rreg si
-    jc fatal16
-
-    cli ; BIOS might try to reenable interrupts, don't let it
-    ret
-bits 32
-
-align 16
-DAPS:
-    db 0x10, 0x00
-    DAPS_sectors dw 0x0000
-    DAPS_buffer dw 0x0000, 0x0000
-    DAPS_lba dq 0x00000000
-
 bits 16
 prot_mode_switch:
     cli
@@ -478,6 +453,8 @@ bits 32
     mov ds, ax
     mov es, ax
     mov ss, ax
+    mov fs, ax
+    mov gs, ax
 
     ; shift return address down 2 bytes
     o16 pop ax
@@ -487,30 +464,64 @@ bits 32
 
 real_mode_switch:
     cli
+    jmp 0x18:.pm16 ; intel says to not directly clear CR0.PE in a 32-bit segment
+bits 16
+    .pm16:
     mov eax, cr0
     and eax, 0xfffffffe
     mov cr0, eax
     jmp 0x0000:.end
     .end:
-bits 16
-
     xor ax, ax
     mov ds, ax
     mov es, ax
     mov ss, ax
+    mov fs, ax
+    mov gs, ax
+    VGA_MARK16 20
 
     ; shift return address up 2 bytes
     pop ax
-    mov bx, sp
-    mov [bx], ax
+    add sp, 2
+    push ax
     ret
 bits 32
+
+bits 16
+; reads up to 32 sectors of boot disk using BIOS EDD
+read_blocks_bios: ; args: lba, count
+    ; BIOS functions are allowed to clobber registers,
+    ; so we have to explicitly preserve all the callee-saved ones here
+    sreg si, di, bp, sp
+
+    mov [DAPS_lba], eax
+    mov [DAPS_sectors], bl
+
+    lea si, [DAPS]
+    mov ah, 0x42
+    mov dl, [boot_drive]
+    rreg si, di, bp, sp
+    jc fatal16
+
+    cli ; BIOS might try to reenable interrupts, don't let it
+    ret
+bits 32
+
+align 16
+DAPS:
+    db 0x10, 0
+    DAPS_sectors dw 0
+    DAPS_buffer dd 0x8000 + 32 * 1024 ; put the bounce buffer right after the bootloader
+    DAPS_lba dq 0
 
 read_blocks: ; args: lba, count, buf
     call real_mode_switch
     bits 16
-    lstr ax, `Hello from real mode!\r\n`
+
+    ; todo
+    lstr ax, `Hello, real mode!\r\n`
     call serial_puts16
+
     call prot_mode_switch
     bits 32
     ret
@@ -523,6 +534,8 @@ protected_mode:
     mov ds, ax
     mov es, ax
     mov ss, ax
+    mov fs, ax
+    mov gs, ax
 
     ; we already set sp in stage 1 but we need to make sure
     ; it's sane again since we switched memory models
@@ -542,6 +555,10 @@ protected_mode:
 
     VGA_MARK32 5
 
+    ; read image into memory
+    mov eax, 64
+    mov ebx, 1
+    mov ecx, 0x7c00
     call read_blocks
 
     ; todo: read image into memory
@@ -552,7 +569,10 @@ protected_mode:
 
     ; todo: enter image
 
-    HANG32
+    lstr eax, `THIS SHOULD NOT BE DISPLAYED.\r\n`
+    call serial_puts32
+    jmp $
+    ; HANG32
 
 align 8
 gdt:
@@ -573,6 +593,17 @@ gdt:
     db 0b10010010
     db 0b11001111
     db 0
+
+    ; real-mode transition segment since the intel programming manual for the N270
+    ; says we need a 16-bit 64KB code segment *before* setting CR0.PE = 0.
+
+    ; code, base = 0, limit = 64KB
+    dw 0xffff ; limit 15:0
+    dw 0 ; base 15:0
+    db 0 ; base 23:16
+    db 0b10011010 ; readable code segment, nonconforming
+    db 0b00000000 ; last 4 bits in the limit, 4KB granularity and 32-bit size
+    db 0 ; base 31:24
 
 gdt_end:
 
