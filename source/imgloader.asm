@@ -93,7 +93,7 @@ org 0x8000 ; start just after boot sector
 %endmacro
 
 ; number of sectors the stage 1 loader should read before jumping here
-db (end - $$ + 511) / 512
+bootloader_sector_length db (end - $$ + 511) / 512
 boot_drive db 0
 align 16
 
@@ -111,7 +111,7 @@ start:
 
     VGA_MARK16 2
 
-    cli ; clear interrupts a second time just in case one of the BIOS functions turned them back on
+    cli
     lgdt [gdtr]
     mov eax, cr0
     or eax, 1 ; CR0.PE
@@ -440,50 +440,79 @@ balloc: ; args: size, alignment, type
     rreg esi, edi, ebp
     ret
 
-; port IO helpers, since this is a temporary driver and we're explicitly not trying to support new hardware, we can hardcode these numbers
-%define ATA_pBASE 0x1f0
 
-; "I/O" ports
-%define ATA_pDATA ATA_pBASE ; 16-bit param size, all others are 8-bit since we use LBA28
-%define ATA_pERROR ATA_pBASE + 1
-%define ATA_pFEATURES ATA_pBASE + 1
-%define ATA_pSECTOR_COUNT ATA_pBASE + 2
-%define ATA_pLBAlo ATA_pBASE + 3
-%define ATA_pLBAmid ATA_pBASE + 4
-%define ATA_pLBAhi ATA_pBASE + 5
-%define ATA_pDRIVE ATA_pBASE + 6
-%define ATA_pSTATUS ATA_pBASE + 7
-%define ATA_pCOMMAND ATA_pBASE + 7
+bits 16
+; reads up to 32 sectors of boot disk using BIOS EDD
+read_blocks_bios: ; args: lba, count
+    mov [DAPS_lba], ax
+    mov [DAPS_sectors], bx
 
-; "Control" ports
-%define ATA_pCTL_BASE 0x3f6
-%define ATA_pALT_STATUS ATA_pCTL_BASE ; like status, but reading does not affect IRQs
-%define ATA_pDEV_CTL ATA_pCTL_BASE
-%define ATA_pDRIVE_ADDR ATA_pCTL_BASE + 1
+    sreg si
+    lea si, [DAPS]
+    mov ah, 0x42
+    mov dl, [boot_drive]
+    rreg si
+    jc fatal16
 
-; errors
-%define ATA_AMNF 1 ; address mark not found
-%define TKZNF 2 ; track zero not found
-%define ABRT 4 ; aborted
-%define MCR 8 ; media change request
-%define IDNF 16 ; id not found
-%define MC 32 ; media changed
-%define UNC 64 ; uncorrectable media error
-%define BBK 128 ; bad block
+    cli ; BIOS might try to reenable interrupts, don't let it
+    ret
+bits 32
 
-; status
-%define ERR 1 ; error occurred
-%define IDX 2 ; index, always set to 0
-%define CORR 4 ; corrected data, always set to 0
-%define DRQ 8 ; data request
-%define SRV 16 ; overlapped mode service request
-%define DF 32 ; drive fault (does not set ERR)
-%define RDY 64 ; ready
-%define BSY 128 ; busy
+align 16
+DAPS:
+    db 0x10, 0x00
+    DAPS_sectors dw 0x0000
+    DAPS_buffer dw 0x0000, 0x0000
+    DAPS_lba dq 0x00000000
 
+bits 16
+prot_mode_switch:
+    cli
+    mov eax, cr0
+    or eax, 1 ; CR0.PE
+    mov cr0, eax
+    jmp 0x08:.end
+bits 32
+    .end:
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
+    mov ss, ax
+
+    ; shift return address down 2 bytes
+    o16 pop ax
+    and eax, 0xFFFF
+    push eax
+    ret
+
+real_mode_switch:
+    cli
+    mov eax, cr0
+    and eax, 0xfffffffe
+    mov cr0, eax
+    jmp 0x0000:.end
+    .end:
+bits 16
+
+    xor ax, ax
+    mov ds, ax
+    mov es, ax
+    mov ss, ax
+
+    ; shift return address up 2 bytes
+    pop ax
+    mov bx, sp
+    mov [bx], ax
+    ret
+bits 32
 
 read_blocks: ; args: lba, count, buf
-    ; todo, wrap READ_SECTOR(S)
+    call real_mode_switch
+    bits 16
+    lstr ax, `Hello from real mode!\r\n`
+    call serial_puts16
+    call prot_mode_switch
+    bits 32
     ret
 
 protected_mode:
@@ -513,9 +542,15 @@ protected_mode:
 
     VGA_MARK32 5
 
-    ; todo: set up forth execution environment
+    call read_blocks
 
-    ; todo: read image into memory, and enter it
+    ; todo: read image into memory
+
+    ; todo: fix pointers
+
+    ; todo: set up forth stacks
+
+    ; todo: enter image
 
     HANG32
 
@@ -538,6 +573,7 @@ gdt:
     db 0b10010010
     db 0b11001111
     db 0
+
 gdt_end:
 
 gdtr:
@@ -555,6 +591,6 @@ hexchars db "0123456789abcdef"
 ; mark the end so we can calculate how many sectors this takes up
 end equ $
 
-; pad to 127 sectors, together with the boot sector
-; this makes the pre-image disk be 128 sectors
-times 512 * 127 - ($ - $$) db 0
+; pad to 63 sectors, together with the boot sector
+; this makes the pre-image disk be 64 sectors
+times 512 * 63 - ($ - $$) db 0
