@@ -404,11 +404,15 @@ balloc: ; args: size, alignment, type
         ; only allocate from usable RAM
         cmp dword [e820_arr + ecx + e820_type_offset], e820_USABLE
         jne .skip
-        ; only allocate from memory within the 4GB address space
-        mov eax, [e820_arr + ecx + e820_base_offset]
-        add eax, [e820_arr + ecx + e820_length_offset]
-        cmp eax, [e820_arr + ecx + e820_base_offset]
-        jb .skip
+
+        ; only allocate from memory within the 4GB address space,
+        ; technically we should only have 32-bit entries anyway since this is meant to run on an IdeaPad,
+        ; but just in case someone tries to boot this on a processor supporting long mode, and has memory above the 4GB mark,
+        ; then we shouldn't crash
+        cmp dword [e820_arr + ecx + e820_base_offset + 4], 0
+        jne .skip
+        cmp dword [e820_arr + ecx + e820_length_offset + 4], 0
+        jne .skip
 
         ; get aligned base by doing `eax = (base + (alignment - 1)) & ~(alignment - 1)`
         mov ebx, edi
@@ -521,18 +525,20 @@ read_blocks_bios: ; args: lba, count
     lea si, [DAPS]
     mov ah, 0x42
     mov dl, [boot_drive]
-    rreg si, di, bp, sp
+    int 0x13
     jc fatal16
 
     cli ; BIOS might try to reenable interrupts, don't let it
+    rreg si, di, bp, sp
     ret
 bits 32
 
 align 16
+%define BBUFADDR 0x8000 + 32 * 1024
 DAPS:
     db 0x10, 0
     DAPS_sectors dw 0
-    DAPS_buffer dd 0x8000 + 32 * 1024 ; put the bounce buffer right after the bootloader
+    DAPS_buffer dw (BBUFADDR / 16), BBUFADDR % 16 ; put the bounce buffer right after the bootloader
     DAPS_lba dq 0
 
 read_blocks: ; args: lba, count, buf
