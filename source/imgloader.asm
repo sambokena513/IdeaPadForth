@@ -214,15 +214,15 @@ fatal32:
     HANG32
 
 bits 16
-; "modeswitch argument buffer" used to pass arguments between real- and protected-mode code,
-; length is 4 for the 4 argument registers (e/ax, e/bx, e/cx, e/dx)
-MSAB times 4 dd 0
+
+tmp dd 0 ; buffer to save e/ax for preserving arguments during mode switches
 
 ; switch from real mode to protected mode,
 ; note that both this and real_mode_switch are bootloader-only functions,
 ; we don't implement anything like this in the forth image being loaded since that actually
 ; has its own drivers, using BIOS there would be incredibly inefficient
 prot_mode_switch:
+    mov [tmp], eax
     cli
     mov eax, cr0
     or eax, 1 ; CR0.PE
@@ -241,10 +241,12 @@ bits 32
     o16 pop ax
     and eax, 0xFFFF
     push eax
+    mov eax, [tmp]
     ret
 
 ; switch from protected mode to real mode
 real_mode_switch:
+    mov [tmp], eax
     cli
     jmp 0x18:.pm16 ; intel says to not directly clear CR0.PE in a 32-bit segment
 bits 16
@@ -265,33 +267,30 @@ bits 16
     pop ax
     add sp, 2
     push ax
+    mov eax, [tmp]
     ret
 bits 32
 
 %macro REAL 0
-call real_mode_switch
-bits 16
+    call real_mode_switch
+    bits 16
 %endmacro
 
 %macro PROT 0
-call prot_mode_switch
-bits 32
+    call prot_mode_switch
+    bits 32
 %endmacro
 
 ; wrapper for invoking bios_putc in protected mode
 bios_putc32: ; args: al (char)
-    mov [MSAB], al
     REAL
-    mov al, [MSAB]
     call bios_putc
     PROT
     ret
 
 ; wrapper for invoking bios_puts in protected mode
 bios_puts32: ; args: ax (strptr)
-    mov [MSAB], ax
     REAL
-    mov ax, [MSAB]
     call bios_puts
     PROT
     ret
@@ -512,26 +511,26 @@ balloc: ; args: size, alignment, type
     ret
 
 
-bits 16
-; reads up to 32 sectors of boot disk using BIOS EDD
+; read sectors into a low-memory buffer using BIOS EDD
 read_blocks_bios: ; args: lba, count
+    REAL
     ; BIOS functions are allowed to clobber registers,
     ; so we have to explicitly preserve all the callee-saved ones here
     sreg si, di, bp, sp
 
-    mov [DAPS_lba], eax
-    mov [DAPS_sectors], bl
+    mov [DAPS_lba], eax ; 32-bit LBA is enough for loading the kernel
+    mov [DAPS_sectors], bl ; should not exceed 127 because some BIOSes will error
 
     lea si, [DAPS]
-    mov ah, 0x42
+    mov ah, 0x42 ; read disk
     mov dl, [boot_drive]
-    int 0x13
+    int 0x13 ; extended disk services
     jc fatal16
 
     cli ; BIOS might try to reenable interrupts, don't let it
     rreg si, di, bp, sp
+    PROT
     ret
-bits 32
 
 align 16
 %define BBUFADDR 0x8000 + 32 * 1024
@@ -542,11 +541,47 @@ DAPS:
     DAPS_lba dq 0
 
 read_blocks: ; args: lba, count, buf
-    call real_mode_switch
-    bits 16
+    ; save count and buf since we'll be updating these
+    mov edx, eax ; lba
+    mov esi, ebx ; count
+    mov edi, ecx ; buf
 
-    call prot_mode_switch
-    bits 32
+    .loop:
+        cmp ebx, 0
+        je .end
+
+        ; don't read more than 64 blocks (32KB) at a time
+        cmp ebx, 64
+        jle .normal
+        .too_high:
+        mov ebx, 64
+        .normal:
+
+        ; read blocks into low-memory buffer
+        call read_blocks_bios
+
+        add eax, ebx ; move disk cursor
+        sub esi, ebx ; decrement the remaining count
+        shl ebx, 9 ; ebx now contains the amount of bytes to copy into the output buffer
+        
+        ; copy the blocks we read into the final buffer
+        .memcpy:
+            cmp ebx, 0
+            je .memcpy_end
+
+            ; copy one byte
+            mov cl, [ebx]
+            mov [edi], cl
+
+            ; increment buffer cursors
+            inc ebx
+            inc edi
+        .memcpy_end:
+
+        ; set up lba and count for next iteration
+        mov eax, edx
+        mov ebx, esi
+    .end:
     ret
 
 protected_mode:
@@ -578,15 +613,15 @@ protected_mode:
 
     VGA_MARK32 5
 
-    ; read image into memory
+    ; read image header
     mov eax, 64
     mov ebx, 1
     mov ecx, 0x7c00
     call read_blocks
 
-    ; todo: read image into memory
+    ; todo: parse image header and read image into memory
 
-    ; todo: fix pointers
+    ; todo: fix image pointers
 
     ; todo: set up forth stacks
 
