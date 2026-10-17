@@ -72,12 +72,9 @@ Basic design:
                     jmp rel32
 
                 CALL:
-                    call [edi + 8*WORD_DESC + WD_IMPL]
-                    (Note here, word descriptors have to be 8 bytes,
-                     1 pointer for the impl and another for an extended
-                     word struct, because otherwise we'd need more than
-                     one instruction to perform this indirect call,
-                     which'd rapidly inflate code size.)
+                    call [edi + WORD_DESC_SIZE*WORD_DESC + WD_IMPL]
+                         (note that since this is a constant calculation,
+                          the actual encoding is edi + disp32)
 
         Calling Convention:
             Function arguments and return values go through the data stack,
@@ -131,7 +128,7 @@ On-Disk Image Format:
             - Word descriptor table: Word entries that each correspond to a
               unique word identity.
             - Word implementation table: Implementation entries that each
-              contain a 16-byte header with a reference count and size, and
+              contain an 8-byte header with a reference count and size, and
               then machine code for the word.
             - Global variable & constant table: ALLOTed memory. Used by words
               like VARIABLE to allocate persistent memory, without this we'd
@@ -139,11 +136,29 @@ On-Disk Image Format:
               always work as indirect call to a word that pushes an address,
               with this though we can make them address with SIB normally.
 
-    The image starts at LBA 128, its first sector
+    The image starts at LBA 64, its first sector
     contains an image header starting halway through the sector,
-    then image entry point (byte offset), followed by disk block
-    start:size pairs for each persistent data structure.
-    Unless otherwise specified, assume fields are 64 bits.
+    consiting of image entry point (byte offset), number of persistent data
+    structures, followed by disk block start:size pairs for each persistent data structure.
+    Unless otherwise specified, assume fields are 32 bits.
+
+    Persistent Data Structure format:
+
+        // note, sectors here and lba assume 512-byte sectors,
+        // on disks with larger logical blocks the bootloader
+        // might need to do some left shifts on this to know
+        // how many sectors to actually read
+        typedef struct PData {
+            uint32 start_lba;
+            uint32 sector_count;
+        } PData;
+
+    Image Header Descriptor format:
+
+        typedef struct IHeaderDesc {
+            void (entry_point)(void); // the address the bootloader should jump to
+            uint32 pdata_entry_count; // number of PData structs after this header
+        } IHeaderDesc;
 
     Pointers between the dictionary, word descriptor table, and word
     implementation table are initially image-start-relative in bytes.
@@ -152,16 +167,23 @@ Image Loading:
 
     The expected in-memory layout of an image is:
 
-        - 0x7c00..0x8000 - Image header, contains 64-bit runtime pointers to start
+        - 0x7c00..0x8000 - Image header, contains 32-bit runtime pointers to start
                            locations for dictionary, word descriptor table,
                            and word implementation table, as well as all the
                            information that the on-disk header had.
 
-        - [0x7c00]..[0x7c08] - Dictionary.
-        - [0x7c10]..[0x7c16] - Word descriptor table.
-        - [0x7c20]..[0x7c28] - Word implementation table.
-        - [0x7c30]..[0x7c38] - Global variable & constant table.
-        - [0x7c40]..[0x7c48] - Memory map.
+        - [0x7c00]..[0x7c04] - Dictionary.
+        - [0x7c08]..[0x7c0c] - Word descriptor table.
+        - [0x7c10]..[0x7c10] - Word implementation table.
+        - [0x7c18]..[0x7c1c] - Global variable & constant table.
+        - [0x7c20]..[0x7c24] - Memory map.
+
+        Persistent data structure in-memory format:
+
+            typedef struct PDataLoaded {
+                *char start;
+                uint32 size;
+            }
 
     With this processor state:
 
@@ -176,7 +198,7 @@ Image Loading:
         - Ensure the A20 line is enabled.
         - Get a memory map from BIOS.
         - Enter protected mode.
-        - Read the sector at LBA 128 into 0x7c00, overwriting the MBR
+        - Read the sector at LBA 64 into 0x7c00, overwriting the MBR
           bootstrap code.
         - Put memory map start and size into the image header.
         - Parse the rest of the image header and based on that read different

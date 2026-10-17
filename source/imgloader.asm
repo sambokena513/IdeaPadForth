@@ -12,7 +12,7 @@
 
 ; forth image loader, this file's job is to
 ; set up everything needed to be able to boot
-; the forth image starting at lba 128
+; the forth image starting at lba 64
 
 ; ABI note; we don't have a complex calling convention in the bootloader, especially in real mode, but once we switch to protected
 ; mode we treat the first four registers (eax, ebx, ecx, edx) as caller-saved, and the other four (esi, edi, ebp, esp) as callee-saved,
@@ -629,9 +629,9 @@ protected_mode:
     VGA_MARK32 5
 
     ; read image header
-    mov eax, 64
-    mov ebx, 1
-    mov ecx, 0x7c00
+    mov eax, 64 ; lba
+    mov ebx, 1 ; 1 sector
+    mov ecx, 0x7c00 ; overwrite MBR code
     call read_blocks
 
     ; todo: parse image header and read image into memory
