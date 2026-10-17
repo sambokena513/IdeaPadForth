@@ -90,7 +90,7 @@ Basic design:
             ebp = &NOS + 4
 
             Note that the stack pointer points to the first *free* cell, so in
-            an empty stack that's the first cell.
+            an empty stack that's the first cell, also the stack grows upward.
 
             Pushing a value to the stack is implemented as the following
             logical operation:
@@ -108,7 +108,12 @@ Basic design:
                 [invalid_memory, dummy_cell, cell1, cell2, ..., celln] in
                 memory to guarantee correctness.
                 In other words, caching the TOS costs us 4 bytes per stack.
-            
+
+            Argument order:
+                The top of the stack is always considered the first argument
+                to a function, and subsequent args are given in lower stack
+                postitions. A concrete example would be `1 2 -`, this will
+                evaluate to +1, not -1.
 
     Parallelism/Concurrency:
         Not built-in, though the planned library-level implementation is
@@ -123,7 +128,8 @@ Basic design:
 On-Disk Image Format:
 
     Persistent data structures:
-        The image has 4 persistent data structures:
+        The image currently has 4 persistent data structures, though this list
+        may be expanded in the future:
             - Dictionary: A word name to descriptor mapping.
             - Word descriptor table: Word entries that each correspond to a
               unique word identity.
@@ -163,6 +169,20 @@ On-Disk Image Format:
     Pointers between the dictionary, word descriptor table, and word
     implementation table are initially image-start-relative in bytes.
 
+    Finally, the order of persistent data structures matters, a persistent
+    data structure's index will be the same in the on-disk header and in memory
+    once loaded, so for referencing data structure roots you need the index to be
+    stable, apart from that indices 0, 1, and 2 have special meanings.
+
+    Index 0 - Reserved, should be empty on disk, but the in-memory header will
+    place the physical memory map here.
+
+    Index 1 - Word descriptor table, a pointer to the start of this data
+    structure can be expected to be in edi when the image is entered.
+
+    Index 2 - Word implementation table.
+
+
 Image Loading:
 
     The expected in-memory layout of an image is:
@@ -172,11 +192,12 @@ Image Loading:
                            and word implementation table, as well as all the
                            information that the on-disk header had.
 
-        - [0x7c00]..[0x7c04] - Dictionary.
+        - [0x7c00]..[0x7c04] - Memory map.
         - [0x7c08]..[0x7c0c] - Word descriptor table.
         - [0x7c10]..[0x7c10] - Word implementation table.
-        - [0x7c18]..[0x7c1c] - Global variable & constant table.
-        - [0x7c20]..[0x7c24] - Memory map.
+        - [0x7c18]..[0x7c1c] - Dictionary.
+        - [0x7c20]..[0x7c24] - Global variable & constant table.
+        - ... - other persistent data structures.
 
         Persistent data structure in-memory format:
 
@@ -193,6 +214,14 @@ Image Loading:
         - an initial main-context data and return stack, each being at least
           4KB large
 
+    Additionally, references between the word descriptor table and word
+    implementation table must be resolved into runtime pointers by the
+    bootloader. Remaining persistent data structures will be initialized by
+    the forth image. This is to make it easy to expand the image with new
+    data structures, while still making sure a minimal execution environment
+    exists once the entry point is reached, and to make sure the bootloader
+    doesn't have to initialize *too* much.
+
     Therefore, an image loader must do at least these things:
 
         - Ensure the A20 line is enabled.
@@ -206,6 +235,7 @@ Image Loading:
         - Allocate memory for, and put runtime pointers into image header for,
           all of the image's persistent data structures, and ensure edi gets
           the runtime pointer for the word descriptor table.
+        - Fix image-start-relative pointers for word desc table and word impl
+          table.
         - set up data and return stacks
-        - Fix image-start-relative pointers for persistent data structures.
         - Jump to image entry point.
