@@ -1,4 +1,4 @@
-Basic design:
+Language design:
 
     Security:
         Similarly to systems like TempleOS, we don't worry about security, but
@@ -21,12 +21,17 @@ Basic design:
         later. STATIC marks a word descriptor as containing the same implementation
         for its whole lifetime, this lets the compiler inline functions.
 
+        Note that STATIC only means the descriptor-impl association is static,
+        not that the implementation will always be loaded at the same address,
+        so any calls not inlined still need to go through the descriptor to
+        get the correct address.
+
         Dictionary mappings have a lifetime of until a word is unbound with
         FORGET, and word descriptors until a DELETE operation, word implementations
         have a short header with a reference count denoting the number of word
         descriptors referencing an implementation, their lifetime is until this hits
         0, and whether an impl should be freed is checked on every DELETE operation
-        and REDEFINE operation.
+        and PATCH operation.
 
         Code referencing an "xt" or "word identity" means a combination of word
         descriptor slot and generation, this lets word descriptor memory be reused by
@@ -46,6 +51,31 @@ Basic design:
                 codeptr without incrementing its generation, used to change word behaviour and
                 make callers see the changes.
 
+        Word Descriptor Struct:
+
+            typedef struct WordDesc {
+                *void impl; // this is a direct pointer to machine code,
+                               subtracting sizeof(WordImplDesc) from this will give you the WordImpl
+                uint32 generation;
+                uint32 flags;
+            } WordDesc;
+
+        Word Implementation Struct:
+
+            typedef struct WordImplDesc {
+                uint32 refcount; // number of references to this impl
+                WordDesc[] callees; // the words called by this impl
+                uint32 callee_count;
+                IR[] ir; // used by other words for inlining if they reference this impl
+                            through a STATIC word descriptor
+                uint32 ir_len;
+            }
+
+            typedef struct WordImpl {
+                WordImplDesc properties;
+                char[] code;
+            } WordImpl;
+
     Execution/Compilation model:
         This Forth has no inner interpreter, but rather word implementations
         execute native code. Compiler words (including the initial compiler) emit
@@ -59,15 +89,14 @@ Basic design:
         and the code-generator/optimizer is an array of simple instruction
         struct pointers, each instruction has a type and operands, the initial
         instructions that must be implemented by the IR format are LIT(imm32),
-        0BRANCH(label), BRANCH(label), CALL(worddesc), and the
+        0BRANCH(offset), BRANCH(offset), CALL(worddesc), and the
         pseudo-instruction LABEL. Note that though x86 makes jumps utilize a
         32-bit *displacement* rather than absolute addresses, in our symbolic IR
-        branches target Label IR instructions rather than having offsets.
+        branches target offsets from the start of the word (indices into the IR array).
 
         Subroutine threading:
             The bootstrap compiler only recognizes the LIT, 0BRANCH, BRANCH,
-            and CALL IR instructions as well as the pseudo-instructio LABEL,
-            emitting this code for each:
+            and CALL IR instructions, emitting this code for each:
 
                 LIT:
                     mov [ebp], imm32
@@ -232,7 +261,7 @@ Image Loading:
 
     With this processor state:
 
-        - edi = [0x7c10] (word desc table)
+        - edi = [0x7c08] (word desc table)
         - ebp = top of data stack
         - protected mode with flat segmentation and no paging
         - an initial main-context data and return stack, each being at least
