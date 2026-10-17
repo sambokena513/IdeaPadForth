@@ -560,22 +560,25 @@ read_blocks: ; args: lba, count, buf
         ; read blocks into low-memory buffer
         call read_blocks_bios
 
-        add eax, ebx ; move disk cursor
+        add edx, ebx ; move disk cursor
         sub esi, ebx ; decrement the remaining count
         shl ebx, 9 ; ebx now contains the amount of bytes to copy into the output buffer
         
         ; copy the blocks we read into the final buffer
+        lea eax, [BBUFADDR]
         .memcpy:
             cmp ebx, 0
             je .memcpy_end
 
             ; copy one byte
-            mov cl, [ebx]
+            mov cl, [eax]
             mov [edi], cl
 
-            ; increment buffer cursors
-            inc ebx
+            ; increment buffer cursors and decrement remaining count
+            dec ebx
+            inc eax
             inc edi
+            jmp .memcpy
         .memcpy_end:
 
         ; set up lba and count for next iteration
