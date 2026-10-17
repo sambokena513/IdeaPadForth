@@ -65,9 +65,9 @@ Language design:
             typedef struct WordImplDesc {
                 uint32 refcount; // number of references to this impl
                 uint32 code_len; // length of machine code in bytes
-                uint32 ir_len; // length of IR array in element count
                 IR[] ir; // used by other words for inlining if they reference this impl
                             through a STATIC word descriptor
+                uint32 ir_len; // length of IR array in bytes
             }
 
             typedef struct WordImpl {
