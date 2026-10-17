@@ -64,9 +64,10 @@ Language design:
 
             typedef struct WordImplDesc {
                 uint32 refcount; // number of references to this impl
+                uint32 code_len; // length of machine code in bytes
+                uint32 ir_len; // length of IR array in element count
                 IR[] ir; // used by other words for inlining if they reference this impl
                             through a STATIC word descriptor
-                uint32 ir_len;
             }
 
             typedef struct WordImpl {
@@ -87,8 +88,7 @@ Language design:
         and the code-generator/optimizer is an array of simple instruction
         struct pointers, each instruction has a type and operands, the initial
         instructions that must be implemented by the IR format are LIT(imm32),
-        0BRANCH(offset), BRANCH(offset), CALL(worddesc), and the
-        pseudo-instruction LABEL. Note that though x86 makes jumps utilize a
+        0BRANCH(offset), BRANCH(offset), CALL(worddesc), Note that though x86 makes jumps utilize a
         32-bit *displacement* rather than absolute addresses, in our symbolic IR
         branches target offsets from the start of the word (indices into the IR array).
 
@@ -145,6 +145,10 @@ Language design:
                 [invalid_memory, dummy_cell, cell1, cell2, ..., celln] in
                 memory to guarantee correctness.
                 In other words, caching the TOS costs us 4 bytes per stack.
+
+                An empty stack is represented by ebp pointing to the dummy
+                cell and esi being undefined, normal nonempty stacks of length
+                N have ebp pointing to index N.
 
             Argument order:
                 The top of the stack is always considered the first argument
@@ -234,7 +238,7 @@ On-Disk Image Format:
         } IHeaderDesc;
 
     Pointers between the dictionary, word descriptor table, and word
-    implementation table are initially image-start-relative in bytes.
+    implementation table are initially section-start-relative in bytes.
 
     Finally, the order of persistent data structures matters, a persistent
     data structure's index will be the same in the on-disk header and in memory
@@ -276,7 +280,7 @@ Image Loading:
     With this processor state:
 
         - edi = [0x7c08] (word desc table)
-        - ebp = top of data stack
+        - ebp = data stack pointer (&NOS + 4)
         - protected mode with flat segmentation and no paging
         - an initial main-context data and return stack, each being at least
           4KB large
@@ -302,7 +306,7 @@ Image Loading:
         - Allocate memory for, and put runtime pointers into image header for,
           all of the image's persistent data structures, and ensure edi gets
           the runtime pointer for the word descriptor table.
-        - Fix image-start-relative pointers for word desc table and word impl
+        - Fix section-start-relative pointers for word desc table and word impl
           table.
         - set up data and return stacks
         - Jump to image entry point.
