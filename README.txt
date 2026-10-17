@@ -64,8 +64,6 @@ Language design:
 
             typedef struct WordImplDesc {
                 uint32 refcount; // number of references to this impl
-                WordDesc[] callees; // the words called by this impl
-                uint32 callee_count;
                 IR[] ir; // used by other words for inlining if they reference this impl
                             through a STATIC word descriptor
                 uint32 ir_len;
@@ -164,6 +162,22 @@ Language design:
         run on single-core processors and does not make use of features like
         hyperthreading either, and synchronization is not an issue since code
         runs in ring 0 with the ability to mask interrupts for critical sections.
+
+        Also, it's important to note that concurrency interacts with word
+        implementation lifetime, if a word is redefined with PATCH while one
+        or more execution contexts contain it somewhere along the call chain,
+        then it cannot be freed yet, thus when concurrency is implemented then
+        the DELETE or PATCH operations will need to cooperate with the
+        scheduler and temporarily make each task that references it boost the
+        refcount, as well as insert a callback that will decrement the
+        refcount and possibly free the impl.
+
+        This is pretty slow, but well, that's what you get when trying
+        to change hot code in a running system. Remember, our target is
+        not extremely performant hot code reload, its good performance
+        normally when the system is not being changed, and the *ability*
+        to change it at runtime if you wish, and do so without recompiling
+        everything.
 
     Language semantics:
         See SmolForth at github.com/sambokena513/SmolForth, language semantics are
