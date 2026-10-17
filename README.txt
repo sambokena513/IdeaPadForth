@@ -8,7 +8,7 @@ Basic design:
         nothing stops a user from deciding to implement a kernel in said Forth,
         deciding on an executable and filesystem formats, making the image entry point
         non-interactive, and loading code that runs in ring 3.
-        As such, while security is not implemented here, it isn't impossible either.
+        As such, while security is not implemented here or planned, it isn't impossible either.
 
     Dictionary:
         Rather than a traditional append-only linked list model, we have a
@@ -31,7 +31,7 @@ Basic design:
         Code referencing an "xt" or "word identity" means a combination of word
         descriptor slot and generation, this lets word descriptor memory be reused by
         incrementing a generation counter (though we keep a high-water mark of the
-        most words that were ever defined at once due to this unfortunately), and give
+        most words that were ever defined at once due to this unfortunately), and gives
         us three composable operations with different semantics:
 
             define(codeptr) - get the first invalid word descriptor and increment its
@@ -55,9 +55,19 @@ Basic design:
         "IR" can be incredibly simple, just emitting subroutine-threaded code for
         example, while not preventing later optimizations.
 
+        The symbolic IR that serves as the interface between compiler words
+        and the code-generator/optimizer is an array of simple instruction
+        struct pointers, each instruction has a type and operands, the initial
+        instructions that must be implemented by the IR format are LIT(imm32),
+        0BRANCH(label), BRANCH(label), CALL(worddesc), and the
+        pseudo-instruction LABEL. Note that though x86 makes jumps utilize a
+        32-bit *displacement* rather than absolute addresses, in our symbolic IR
+        branches target Label IR instructions rather than having offsets.
+
         Subroutine threading:
             The bootstrap compiler only recognizes the LIT, 0BRANCH, BRANCH,
-            and CALL IR instructions, emitting this code for each:
+            and CALL IR instructions as well as the pseudo-instructio LABEL,
+            emitting this code for each:
 
                 LIT:
                     mov [ebp], imm32
@@ -72,7 +82,7 @@ Basic design:
                     jmp rel32
 
                 CALL:
-                    call [edi + WORD_DESC_SIZE*WORD_DESC + WD_IMPL]
+                    call [edi + WORD_DESC_SIZE*WORD_DESC]
                          (note that since this is a constant calculation,
                           the actual encoding is edi + disp32)
 
@@ -116,8 +126,15 @@ Basic design:
                 evaluate to +1, not -1.
 
     Parallelism/Concurrency:
-        Not built-in, though the planned library-level implementation is
-        cooperative multitasking similar to SmolForth for concurrency.
+        Not a built-in language feature, though the planned library-level
+        implementation is cooperative multitasking similar to SmolForth's <stdco.f>
+        library, only with a fair virtual-runtime based scheduler using a red-black
+        tree to represent the runnable set rather than round-robin with a linked list.
+
+        No parallelism or synchronization because this system is designed to
+        run on single-core processors and does not make use of features like
+        hyperthreading either, and synchronization is not an issue since code
+        runs in ring 0 with the ability to mask interrupts for critical sections.
 
     Language semantics:
         See SmolForth at github.com/sambokena513/SmolForth, language semantics are
@@ -148,6 +165,13 @@ On-Disk Image Format:
     structures, followed by disk block start:size pairs for each persistent data structure.
     Unless otherwise specified, assume fields are 32 bits.
 
+    Note that because the image header contains LBA start fields and sector
+    counts, in principle the logical image can actually be spread across the
+    disk, only individual persistent data structures need to be contiguous,
+    this is useful because if the image being loaded implements a filesystem
+    of some sort, you can make each data structure be a file, and put the
+    filesystem's root metadata at LBA 65 (right after the image header).
+
     Persistent Data Structure format:
 
         // note, sectors here and lba assume 512-byte sectors,
@@ -162,7 +186,7 @@ On-Disk Image Format:
     Image Header Descriptor format:
 
         typedef struct IHeaderDesc {
-            void (entry_point)(void); // the address the bootloader should jump to
+            uint32 image_entry; // the word descriptor the bootloader should call
             uint32 pdata_entry_count; // number of PData structs after this header
         } IHeaderDesc;
 
