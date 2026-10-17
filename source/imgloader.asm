@@ -537,7 +537,7 @@ align 16
 DAPS:
     db 0x10, 0
     DAPS_sectors dw 0
-    DAPS_buffer dw (BBUFADDR / 16), BBUFADDR % 16 ; put the bounce buffer right after the bootloader
+    DAPS_buffer dw BBUFADDR % 16, BBUFADDR / 16 ; put the bounce buffer right after the bootloader
     DAPS_lba dq 0
 
 read_blocks: ; args: lba, count, buf
