@@ -187,7 +187,7 @@ bios_puts: ; args: ax (strptr)
     pop bx
     ret
 
-align 4
+align 4, db 0
 DAPS: ; disk address packet structure
 db 0x10, 0x00
 DAPS_sector_count dw 0x0001 ; number of sectors to transfer

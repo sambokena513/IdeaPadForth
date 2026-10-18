@@ -16,7 +16,7 @@ org 0 ; not actually loaded at 0x00000000, but this gives us simple relative lab
 addr0:
 
 ; align to logical block
-%define ALIGN_LBLK align 512
+%define ALIGN_LBLK align 512, db 0
 
 ; the start of the image header
 %define IMG_START_LBA 64

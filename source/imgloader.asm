@@ -119,7 +119,7 @@ org 0x8000 ; start just after boot sector
 ; number of sectors the stage 1 loader should read before jumping here
 bootloader_sector_length db (end - $$ + 511) / 512
 boot_drive db 0
-align 16
+align 16, db 0
 
 ; this should be at 0x8010
 start:
@@ -544,7 +544,7 @@ read_blocks_bios: ; args: lba, count
     PROT
     ret
 
-align 16
+align 16, db 0
 %define BBUFADDR 0x8000 + 32 * 1024
 DAPS:
     db 0x10, 0
@@ -646,7 +646,7 @@ protected_mode:
     call bios_puts32
     HANG32
 
-align 8
+align 8, db 0
 gdt:
     dq 0 ; must be null
 
