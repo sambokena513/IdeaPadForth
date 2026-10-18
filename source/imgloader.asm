@@ -33,6 +33,7 @@ org 0x8000 ; start just after boot sector
 %define e820_NVS 4 ; firmware expects this to be preserved across sleep/restore states
 %define e820_UNUSABLE 5 ; bad memory
 ; custom types
+%define e820_BIOS_RECLAIMABLE 127 ; may reclaim once no longer using BIOS/real mode for anything
 %define e820_FIF_SECTION 128 ; forth image format section
 
 ; signature we pass to 15h, e820 to say we want a memory map
@@ -176,6 +177,8 @@ get_mmap:
         mov eax, 0xe820
         int 0x15
         jc .end ; carry on a call other than first means end of list
+        cmp byte [e820_arr_len], 254 ; stop collecting entries if it would overflow
+        je .end
         cmp ebx, 0
         je .end
         cmp cl, 20
@@ -428,6 +431,11 @@ balloc: ; args: size, alignment, type
         jne .skip
         cmp dword [e820_arr + ecx + e820_length_offset + 4], 0
         jne .skip
+        ; overflow check
+        mov eax, [e820_arr + ecx + e820_base_offset]
+        add eax, [e820_arr + ecx + e820_length_offset]
+        cmp eax, [e820_arr + ecx + e820_base_offset]
+        jb .skip
 
         ; get aligned base by doing `eax = (base + (alignment - 1)) & ~(alignment - 1)`
         mov ebx, edi
@@ -459,19 +467,6 @@ balloc: ; args: size, alignment, type
         cmp byte [e820_arr_len], 255
         je .fail
 
-        %ifdef DEBUG
-            ; print entry start, and amount to allocate
-            sreg eax, ebx, ecx, edx
-            call bios_puth32
-            lstr eax, `\r\n`
-            call bios_puts32
-            mov eax, esi
-            call bios_puth32
-            lstr eax, `\r\n`
-            call bios_puts32
-            rreg eax, ebx, ecx, edx
-        %endif
-
         ; ebx is now the pointer to the new entry we're appending
         sreg eax, edx
         movzx eax, byte [e820_arr_len]
@@ -479,16 +474,6 @@ balloc: ; args: size, alignment, type
         mul dx
         lea ebx, [e820_arr + eax]
         rreg eax, edx
-
-        %ifdef DEBUG
-            ; print new entry pointer
-            sreg eax, ebx, ecx, edx
-            mov eax, ebx
-            call bios_puth32
-            lstr eax, `\r\n`
-            call bios_puts32
-            rreg eax, ebx, ecx, edx
-        %endif
 
         ; shorten entry we're splitting from, putting its original start in edi
         mov edi, eax
@@ -559,6 +544,8 @@ DAPS:
     DAPS_lba dq 0
 
 read_blocks: ; args: lba, count, buf
+    sreg esi, edi
+
     ; save count and buf since we'll be updating these
     mov edx, eax ; lba
     mov esi, ebx ; count
@@ -603,6 +590,72 @@ read_blocks: ; args: lba, count, buf
         mov eax, edx
         mov ebx, esi
     .end:
+    rreg esi, edi
+    ret
+
+; assuming a sorted and deduplicated memory map,
+; mark the initial area containing the IVT and BDA as BIOS_RECLAIMABLE
+reserve_ivt_and_bda:
+    ; make sure entry is in 32-bit address space (just in case)
+    cmp dword [e820_arr + e820_base_offset + 4], 0
+    jne .end
+    cmp dword [e820_arr + e820_length_offset + 4], 0
+    jne .end
+
+    ; make sure entry actually starts at 0
+    cmp dword [e820_arr], 0
+    jnz .end
+    
+    add dword [e820_arr + e820_base_offset], 1280 ; IVT + BDA
+    sub dword [e820_arr + e820_length_offset], 1280
+
+    ; don't add new entry if it would go over the limit
+    cmp byte [e820_arr_len], 255
+    je .end
+
+    ; count = 20 * entry_count
+    movzx eax, byte [e820_arr_len]
+    mov ebx, eax
+    shl eax, 4
+    shl ebx, 2
+    add eax, ebx
+
+    mov edx, eax
+    dec edx
+
+    ; dest = dest + n - 1
+    mov ebx, e820_arr + 20
+    add ebx, edx
+
+    ; src = src + n - 1
+    mov ecx, e820_arr
+    add ecx, edx
+
+    ; shift entries forward by 20 bytes
+    .loop:
+        test eax, eax
+        jz .endloop
+
+        mov dl, byte [ecx]
+        mov byte [ebx], dl
+
+        dec ecx
+        dec ebx
+        dec eax
+        jmp .loop
+
+    .endloop:
+
+    ; insert new entry representing the IVT and BDA
+    mov eax, e820_arr
+    mov dword [eax + e820_base_offset], 0
+    mov dword [eax + e820_base_offset + 4], 0
+    mov dword [eax + e820_length_offset], 1280
+    mov dword [eax + e820_length_offset + 4], 0
+    mov dword [eax + e820_type_offset], e820_BIOS_RECLAIMABLE
+    add byte [e820_arr_len], 1
+
+    .end:
     ret
 
 protected_mode:
@@ -625,8 +678,10 @@ protected_mode:
     lstr eax, `Entered protected mode.\r\n`
     call bios_puts32
 
-    ; todo: sort and merge e820 entries, currently it's fine because we're in QEMU and SeaBIOS is nice,
-    ; but we can't expect Phoenix TrustedCore to give us sensible entries
+    ; todo: sort and merge e820 entries, and resolve overlaps, currently it's fine because we're in QEMU and SeaBIOS is nice,
+    ; but we can't expect the same out of real BIOSes
+
+    call reserve_ivt_and_bda
 
     lstr eax, `Printing memory map:\r\n`
     call bios_puts32
@@ -646,8 +701,19 @@ protected_mode:
 parse_image:
     ; parse image header and read sections
 
+    ; mark memory map location in runtime header
+    movzx eax, byte [e820_arr_len]
+    mov ebx, eax
+    shl eax, 4
+    shl ebx, 2
+    add eax, ebx
+    add eax, e820_arr
+
+    mov dword [0x7c00], e820_arr
+    mov dword [0x7c04], eax
+
     ; edi gets the amount of real sections (-1 because of the extra 0 section)
-    ; and edx gets the address of the first valid section descriptor (once again, we skip index 0)
+    ; and esi gets the address of the first valid section descriptor (once again, we skip index 0)
     mov edi, [0x7c00 + 256 + 4]
     dec edi
     mov esi, 0x7c00 + 256 + 16
@@ -657,16 +723,16 @@ parse_image:
         cmp edi, 0
         je .end
 
-        %ifdef DEBUG
-            sreg eax, ebx, ecx, edx
-            lstr eax, `Requesting 0x`
-            call bios_puts32
-            mov eax, [esi + 4]
-            call bios_puth32
-            lstr eax, ` bytes of memory to load image section.\r\n`
-            call bios_puts32
-            rreg eax, ebx, ecx, edx
-        %endif
+        ; print amount of memory the section takes up
+        sreg eax, ebx, ecx, edx
+        lstr eax, `Requesting 0x`
+        call bios_puts32
+        mov eax, [esi + 4]
+        shl eax, 9
+        call bios_puth32
+        lstr eax, ` bytes of memory to load image section.\r\n`
+        call bios_puts32
+        rreg eax, ebx, ecx, edx
 
         ; allocate memory for section
         mov eax, [esi + 4] ; size
@@ -750,6 +816,13 @@ times 20 * 255 db 0
 hexchars db "0123456789abcdef"
 ; mark the end so we can calculate how many sectors this takes up
 end equ $
+
+; print out size
+%assign STAGE2_SIZE %eval(end - $$)
+%warning Size of stage 2 is STAGE2_SIZE bytes
+%if STAGE2_SIZE > (63 * 512)
+    %error Executable too large.
+%endif
 
 ; pad to 63 sectors, together with the boot sector
 ; this makes the pre-image disk be 64 sectors
