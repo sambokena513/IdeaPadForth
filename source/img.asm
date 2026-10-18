@@ -32,11 +32,11 @@ addr0:
     ALIGN_LBLK
 
     times 256 db 0 ; runtime, nothing on disk
-    dq 0 ; reserved for idx calculations to be simpler
 
     dd %1 ; entry point word descriptor index
-    dd %0 - 1 ; number of section descriptors
+    dd %0 ; number of section descriptors, + 1 over the actual amount of sections because of the reserved 0 idx
 
+    dq 0 ; reserved for idx calculations to be simpler
     %rotate 1 ; discard wd idx arg
 
     ; loop through sections and emit the descriptors

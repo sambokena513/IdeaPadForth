@@ -32,6 +32,10 @@ org 0x8000 ; start just after boot sector
 %define e820_ACPI 3 ; can reclaim after processing ACPI data
 %define e820_NVS 4 ; firmware expects this to be preserved across sleep/restore states
 %define e820_UNUSABLE 5 ; bad memory
+; custom types
+%define e820_FIF_SECTION 128 ; forth image format section
+
+; signature we pass to 15h, e820 to say we want a memory map
 %define SMAP 0x534d4150
 
 ; very slightly increases binary size compared to db because it uses a jmp (more specifically, adds 2 bytes on most strings),
@@ -384,7 +388,7 @@ print_mmap: ; no args
 ; Returns the address of the aligned allocation and the address of the new entry,
 ; or NULL and NULL for failure.
 
-; Performance is O(n), and will fail if allocation causes the e820_arr to to exceed 255 entries,
+; Performance is O(n), and will fail if allocation causes the e820_arr to exceed 255 entries,
 ; this function is intended for being called a few times when reserving memory for page tables or
 ; when loading a kernel/forth image, not for general-purpose allocation, as such, there is no equivalent bfree,
 ; the kernel or image loaded from disk is responsible for managing physical memory later.
@@ -528,7 +532,7 @@ read_blocks_bios: ; args: lba, count
     REAL
     ; BIOS functions are allowed to clobber registers,
     ; so we have to explicitly preserve all the callee-saved ones here
-    sreg si, di, bp, sp
+    sreg esi, edi, ebp
 
     mov [DAPS_lba], eax ; 32-bit LBA is enough for loading the kernel
     mov [DAPS_sectors], bl ; should not exceed 127 because some BIOSes will error
@@ -538,14 +542,16 @@ read_blocks_bios: ; args: lba, count
     mov dl, [boot_drive]
     int 0x13 ; extended disk services
     jc fatal16
+    test ah, ah
+    jnz fatal16
 
     cli ; BIOS might try to reenable interrupts, don't let it
-    rreg si, di, bp, sp
+    rreg esi, edi, ebp
     PROT
     ret
 
 align 16, db 0
-%define BBUFADDR 0x8000 + 32 * 1024
+%define BBUFADDR (0x8000 + 32 * 1024)
 DAPS:
     db 0x10, 0
     DAPS_sectors dw 0
@@ -619,6 +625,9 @@ protected_mode:
     lstr eax, `Entered protected mode.\r\n`
     call bios_puts32
 
+    ; todo: sort and merge e820 entries, currently it's fine because we're in QEMU and SeaBIOS is nice,
+    ; but we can't expect Phoenix TrustedCore to give us sensible entries
+
     lstr eax, `Printing memory map:\r\n`
     call bios_puts32
 
@@ -634,14 +643,62 @@ protected_mode:
     mov ecx, 0x7c00 ; overwrite MBR code
     call read_blocks
 
-    ; todo: parse image header and read image into memory
+parse_image:
+    ; parse image header and read sections
 
+    ; edi gets the amount of real sections (-1 because of the extra 0 section)
+    ; and edx gets the address of the first valid section descriptor (once again, we skip index 0)
+    mov edi, [0x7c00 + 256 + 4]
+    dec edi
+    mov esi, 0x7c00 + 256 + 16
+
+    ; parse section descriptor, allocate memory, and read from disk
+    .loop:
+        cmp edi, 0
+        je .end
+
+        %ifdef DEBUG
+            sreg eax, ebx, ecx, edx
+            lstr eax, `Requesting 0x`
+            call bios_puts32
+            mov eax, [esi + 4]
+            call bios_puth32
+            lstr eax, ` bytes of memory to load image section.\r\n`
+            call bios_puts32
+            rreg eax, ebx, ecx, edx
+        %endif
+
+        ; allocate memory for section
+        mov eax, [esi + 4] ; size
+        shl eax, 9
+        mov ebx, 4096 ; aligment
+        mov ecx, e820_FIF_SECTION ; type
+        call balloc ; we ignore the returned entry address because we only care about the returned memory
+        test eax, eax
+        jz fatal32
+
+        ; read section
+        mov ecx, eax ; buffer is the allocated memory
+        mov ebx, [esi + 4] ; sector count
+        mov eax, [esi] ; lba
+        call read_blocks
+
+        add esi, 8
+        dec edi
+        jmp .loop
+    .end:
+
+    call print_mmap
+
+fix_pointers:
     ; todo: fix image pointers
 
+final:
     ; todo: set up forth stacks
 
     ; todo: enter image
 
+fallthrough:
     lstr eax, `Reached end of bootloader code, if you are seeing this, it means the image handoff failed.\r\n`
     call bios_puts32
     HANG32
