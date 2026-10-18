@@ -130,7 +130,8 @@ END_SECTION
 ; word implementation table
 START_SECTION IMPL_TABLE
     IMPL_PRIM 1, INIT
-        nop ; todo, this should do a hello world
+        mov byte [0xb8000], 'Z' ; our "hello world", should print Z to the top left corner of the screen
+        ret ; should normally be unreachable, but in the first few bootstrap images we will ret
     END_IMPL
 END_SECTION
 
