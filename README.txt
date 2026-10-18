@@ -51,6 +51,18 @@ Language design:
                 codeptr without incrementing its generation, used to change word behaviour and
                 make callers see the changes.
 
+        Dictionary Entry Struct:
+
+            typedef struct DictEntry {
+                uint32 next; // may be NULL, in which case there is no next entry
+                uint32 wd_idx; // where to find the associated word
+                uint32 wd_gen; // if there's a mismatch between this and the
+                               // generation field of the WordDesc at wd_idx
+                               // then words like EXECUTE will throw exceptions
+                uint32 name_len; // length-prefixed strings
+                char[] name; // external name to FIND words by
+            } DictEntry;
+
         Word Descriptor Struct:
 
             typedef struct WordDesc {
@@ -72,7 +84,9 @@ Language design:
 
             typedef struct WordImpl {
                 WordImplDesc properties;
-                char[] code;
+                char[] code; // note that pointers to WordImpl's are actually
+                             // pointers to this code array, not to the WordImplDesc
+                             // that is higher in the struct
             } WordImpl;
 
     Execution/Compilation model:

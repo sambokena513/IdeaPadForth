@@ -13,6 +13,10 @@
 bits 32
 org 0 ; not actually loaded at 0x00000000, but this gives us simple relative label offsets
 
+addr0:
+; latest dict entry in assembler, NOT A RUNTIME VARIABLE!
+%define LATEST addr0
+
 ; align to logical block
 %define ALIGN_LBLK align 512
 
@@ -21,6 +25,9 @@ org 0 ; not actually loaded at 0x00000000, but this gives us simple relative lab
 
 ; bootloader gives us our boot information here
 %define RUNTIME_HEADER 0x7c00
+
+; size of a word descriptor struct
+%define WDDESC_SIZE 12
 
 ; generate image header from sections 
 %macro HEADER 1-*
@@ -52,38 +59,78 @@ org 0 ; not actually loaded at 0x00000000, but this gives us simple relative lab
 ; start an image section
 %macro START_SECTION 1
     ALIGN_LBLK
-    %push section_ctx
-    %define %$section_name %1
-    %$section_name %+ _START:
+    %define section_name %1 ; not context-local since DICT_ENTRY needs to reference it
+    section_name %+ _START:
 %endmacro
 
 ; end an image section
 %macro END_SECTION 0
     ALIGN_LBLK
-    %$section_name %+ _END:
+    section_name %+ _END:
+%endmacro
+
+; emit a WordImpl struct for a primitive word,
+; args are the name of the word's code label, and initial refcount
+%macro IMPL_PRIM 2
+    %push impl_ctx
+    %$impl_start:
+
+    dd %1
+    dd (%$impl_end - $$) - (%$impl_start - $$)
+    dd 0 ; no IR for primitive/anonymous words
+    %2 %+ _IMPL: ; make this word's impl available to other macros
+%endmacro
+
+%macro END_IMPL 0
+    %$impl_end:
     %pop
 %endmacro
 
+; emit a WordDesc struct for a chosen impl
+%macro WORD_DESC 2
+    %1 %+ _WD:
+    dd %1 %+ _IMPL ; target
+    dd 0 ; new words start with generation 0
+    dd %2 ; flags
+%endmacro
 
+; emit a dictionary entry,
+; args are word label and external name
+%macro DICT_ENTRY 2
+    %define %%wd_offset (%1 %+ _WD - $$) - (WD_TABLE_START - $$)
+    %strlen len %2
+
+    %%entry:
+
+    dd LATEST - (DICT_START - $$)
+    dd %%wd_offset / WDDESC_SIZE ; wd_idx field
+    dd 0
+    dd len
+    db %2
+
+    %define LATEST %%entry
+%endmacro
 
 HEADER 0, WD_TABLE, IMPL_TABLE, DICT, GVCT_TABLE
 
 ; word descriptor table
 START_SECTION WD_TABLE
-    db "PLACEHOLDER"
+    WORD_DESC INIT, 0
 END_SECTION
 
 ; word implementation table
 START_SECTION IMPL_TABLE
-    db "PLACEHOLDER"
+    IMPL_PRIM 1, INIT
+        nop ; todo, this should do a hello world
+    END_IMPL
 END_SECTION
 
 ; dictionary
 START_SECTION DICT
-    db "PLACEHOLDER"
+    DICT_ENTRY INIT, "INIT"
 END_SECTION
 
 ; global-variable & constant table
 START_SECTION GVCT_TABLE
-    db "PLACEHOLDER"
+    latest dd LATEST
 END_SECTION
