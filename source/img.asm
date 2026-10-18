@@ -66,14 +66,24 @@ org 0 ; not actually loaded at 0x00000000, but this gives us simple relative lab
 
 
 
-HEADER 0, WD_TABLE, IMPL_TABLE
+HEADER 0, WD_TABLE, IMPL_TABLE, DICT, GVCT_TABLE
 
-; word descriptors
+; word descriptor table
 START_SECTION WD_TABLE
     db "PLACEHOLDER"
 END_SECTION
 
-; word implementations
+; word implementation table
 START_SECTION IMPL_TABLE
+    db "PLACEHOLDER"
+END_SECTION
+
+; dictionary
+START_SECTION DICT
+    db "PLACEHOLDER"
+END_SECTION
+
+; global-variable & constant table
+START_SECTION GVCT_TABLE
     db "PLACEHOLDER"
 END_SECTION
