@@ -16,6 +16,12 @@ org 0 ; not actually loaded at 0x00000000, but this gives us simple relative lab
 ; align to logical block
 %define ALIGN_LBLK align 512
 
+; the start of the image header
+%define IMG_START_LBA 64
+
+; bootloader gives us our boot information here
+%define RUNTIME_HEADER 0x7c00
+
 ; generate image header from sections 
 %macro HEADER 1-*
     ALIGN_LBLK
@@ -39,7 +45,7 @@ org 0 ; not actually loaded at 0x00000000, but this gives us simple relative lab
 %macro SECTION_DESC 1
     %define section_start ((%1 %+ _START) - $$)
     %define section_end ((%1 %+ _END) - $$)
-    dd section_start / 512
+    dd IMG_START_LBA + (section_start / 512)
     dd (section_end - section_start) / 512
 %endmacro
 
