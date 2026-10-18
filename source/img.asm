@@ -14,8 +14,6 @@ bits 32
 org 0 ; not actually loaded at 0x00000000, but this gives us simple relative label offsets
 
 addr0:
-; latest dict entry in assembler, NOT A RUNTIME VARIABLE!
-%define LATEST addr0
 
 ; align to logical block
 %define ALIGN_LBLK align 512
@@ -94,21 +92,32 @@ addr0:
     dd %2 ; flags
 %endmacro
 
+
+; latest dict entry in assembler, NOT A RUNTIME VARIABLE!
+%push dict_ctx
+%define %$LATEST addr0
+
 ; emit a dictionary entry,
 ; args are word label and external name
 %macro DICT_ENTRY 2
-    %define %%wd_offset (%1 %+ _WD - $$) - (WD_TABLE_START - $$)
+    %define %%wd_offset ((%1 %+ _WD - $$) - (WD_TABLE_START - $$))
+    %ifdef DEBUG
+        %warning Index of %1 %+ _WD is: %eval(%%wd_offset / WDDESC_SIZE)
+    %endif
     %strlen len %2
 
     %%entry:
 
-    dd LATEST - (DICT_START - $$)
+    dd %$LATEST
     dd %%wd_offset / WDDESC_SIZE ; wd_idx field
     dd 0
     dd len
     db %2
 
-    %define LATEST %%entry
+    %define %$LATEST (%%entry - DICT_START)
+    %ifdef DEBUG
+        %warning Setting LATEST to %eval(%$LATEST)
+    %endif
 %endmacro
 
 HEADER 0, WD_TABLE, IMPL_TABLE, DICT, GVCT_TABLE
@@ -127,10 +136,14 @@ END_SECTION
 
 ; dictionary
 START_SECTION DICT
+    db 0 ; offset the first dictionary entry by 1 byte so we can distinguish between entry 0 and NULL
+
     DICT_ENTRY INIT, "INIT"
 END_SECTION
 
 ; global-variable & constant table
 START_SECTION GVCT_TABLE
-    latest dd LATEST
+    here dd HERE_START - GVCT_TABLE_START ; cursor in the constant table
+    latest dd %$LATEST
+    HERE_START:
 END_SECTION
