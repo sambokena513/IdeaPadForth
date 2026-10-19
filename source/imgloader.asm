@@ -681,6 +681,10 @@ protected_mode:
     ; todo: sort and merge e820 entries, and resolve overlaps, currently it's fine because we're in QEMU and SeaBIOS is nice,
     ; but we can't expect the same out of real BIOSes
 
+    ; since our physical memory allocator returns 0 to indicate failure,
+    ; allowing it to allocate from the first 1280 bytes would make it possibly return 0 as the actual address,
+    ; thus causing the bootloader to fail as it thinks it has no memory,
+    ; though technically this memory is reclaimable by the forth image later.
     call reserve_ivt_and_bda
 
     lstr eax, `Printing memory map:\r\n`
@@ -737,11 +741,18 @@ parse_image:
         ; allocate memory for section
         mov eax, [esi + 4] ; size
         shl eax, 9
+        ; mark length in runtime header
+        mov [esi - 256 + 4], eax
+
         mov ebx, 4096 ; aligment
         mov ecx, e820_FIF_SECTION ; type
         call balloc ; we ignore the returned entry address because we only care about the returned memory
         test eax, eax
-        jz fatal32
+        jz fatal32 ; if we cannot load image, bootloader failed
+
+        ; move start and end of section into runtime header
+        mov [esi - 256], eax
+        add [esi - 256 + 4], eax
 
         ; read section
         mov ecx, eax ; buffer is the allocated memory
