@@ -18,13 +18,8 @@ start:
     jmp 0:.skip ; make sure CS is correct
     .skip:
 
-    ; we reenable these in stage 2
+    ; reenabled by the kernel much later
     cli
-
-    ; NMIs
-    in al, 0x70
-    or al, 0x80
-    out 0x70, al
 
     ; zero ds so we can use absolute addresses for our first 64kb (the size of stage 1 + stage 2)
     xor ax, ax

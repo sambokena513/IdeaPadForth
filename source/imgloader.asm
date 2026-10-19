@@ -437,8 +437,7 @@ balloc: ; args: size, alignment, type
         ; overflow check
         mov eax, [e820_arr + ecx + e820_base_offset]
         add eax, [e820_arr + ecx + e820_length_offset]
-        cmp eax, [e820_arr + ecx + e820_base_offset]
-        jb .skip
+        jc .skip
 
         ; get aligned base by doing `eax = (base + (alignment - 1)) & ~(alignment - 1)`
         mov ebx, edi
@@ -649,12 +648,15 @@ sort_smap:
         mov edi, [eax + edx + 4]
         cmp esi, edi
         ja .unsorted
+        jb .skip
 
         ; A > B yet A before B?
         mov esi, [eax + ecx]
         mov edi, [eax + edx]
         cmp esi, edi
         ja .unsorted
+
+        .skip:
 
         add ecx, 20
         add edx, 20
@@ -697,9 +699,57 @@ sort_smap:
         ret
 
 ; check for, and resolve overlaps in smap entries by
-; marking the overlap with the more restrictive type
+; marking the overlap with the more restrictive type,
+; note that this only checks overlap at the beginning (relying on the list being sorted)
 resolve_overlaps_smap:
-    ret
+    sreg esi, edi
+    .outer:
+    mov eax, e820_arr
+
+    mov ebx, [e820_arr_len]
+    mov edx, ebx
+    shl ebx, 4
+    shl edx, 2
+    add ebx, edx ; ebx = len(e820_arr)
+
+    xor ecx, ecx ; ecx = i
+    mov edx, 20 ; edx = i + 1
+
+    .loop:
+        cmp edx, ebx
+        je .done
+
+        ; if A.end := (A.start + A.length) >= B.start
+
+        ; calculate end and put lower half in esi and upper half in edi
+        mov esi, [eax + ecx]
+        mov edi, [eax + ecx + 4]
+        add esi, [eax + ecx + 8]
+        adc edi, [eax + ecx + 12]
+
+        ; compare A.end with B.start
+        cmp [eax + edx + 4], edi
+        jb .overlap
+        cmp [eax + edx], esi
+        jbe .overlap
+
+        add ecx, 20
+        add edx, 20
+        jmp .loop
+
+    .done:
+        rreg esi, edi
+        ret
+
+    .overlap:
+        ; resolve overlap
+        lstr eax, `Found overlap, resolving...`
+        call bios_puts32
+
+        ; todo: actually resolve that overlap
+
+        jmp .outer
+        ret
 
 ; merge adjacent entries of the same type in the system address map
 merge_entries_smap:
@@ -726,11 +776,20 @@ protected_mode:
     call bios_puts32
 
     ; make sure physical allocator does not overwrite our stack or code
+    lstr eax, `Reserving memory for bootloader.\r\n.`
+    call bios_puts32
     call reserve_bootloader
 
-    ; todo: sort and merge e820 entries, and resolve overlaps
+    lstr eax, `Sorting memory map.\r\n`
+    call bios_puts32
     call sort_smap
+
+    lstr eax, `Resolving overlaps...\r\n`
+    call bios_puts32
     call resolve_overlaps_smap
+
+    lstr eax, `Merging entries...\r\n`
+    call bios_puts32
     call merge_entries_smap
 
     lstr eax, `Printing memory map:\r\n`
