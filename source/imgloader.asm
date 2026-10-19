@@ -33,7 +33,7 @@ org 0x8000 ; start just after boot sector
 %define e820_NVS 4 ; firmware expects this to be preserved across sleep/restore states
 %define e820_UNUSABLE 5 ; bad memory
 ; custom types
-%define e820_BIOS_RECLAIMABLE 127 ; may reclaim once no longer using BIOS/real mode for anything
+%define e820_BOOTLOADER_RECLAIMABLE 127 ; may reclaim once no longer using BIOS/real mode for anything
 %define e820_FIF_SECTION 128 ; forth image format section
 
 ; signature we pass to 15h, e820 to say we want a memory map
@@ -114,7 +114,11 @@ org 0x8000 ; start just after boot sector
     sreg ax
     ; just an arbitrary value I picked since it's slow enough on my processor
     ; that I can read the output of operations as they're done
-    mov eax, 0x004fffff
+    %ifndef WAITITER
+        mov eax, 0x004fffff
+    %else
+        mov eax. WAITITER ; wait time override
+    %endif
     %%wait:
         dec eax
         jnz %%wait
@@ -129,9 +133,8 @@ align 16, db 0
 ; this should be at 0x8010
 start:
     ; at this point cs, ds, es, and ss should be zeroed, and all interrupts should be disabled,
-    ; serial output should also be initialized by the MBR bootstrap
 
-    lstr ax, `Starting. \r\n`
+    lstr ax, `Starting.\r\n`
     call bios_puts
 
     VGA_MARK16 1
@@ -593,69 +596,113 @@ read_blocks: ; args: lba, count, buf
     rreg esi, edi
     ret
 
-; assuming a sorted and deduplicated memory map,
-; mark the initial area containing the IVT and BDA as BIOS_RECLAIMABLE
-reserve_ivt_and_bda:
-    ; make sure entry is in 32-bit address space (just in case)
-    cmp dword [e820_arr + e820_base_offset + 4], 0
-    jne .end
-    cmp dword [e820_arr + e820_length_offset + 4], 0
-    jne .end
-
-    ; make sure entry actually starts at 0
-    cmp dword [e820_arr], 0
-    jnz .end
-    
-    add dword [e820_arr + e820_base_offset], 1280 ; IVT + BDA
-    sub dword [e820_arr + e820_length_offset], 1280
-
-    ; don't add new entry if it would go over the limit
-    cmp byte [e820_arr_len], 255
-    je .end
-
-    ; count = 20 * entry_count
+; mark the area containing the bootloader (0 - 0x10000) as BOOTLOADER_RESERVED
+; note; this only creates a new entry, it does not remove existing ones,
+; meaning that using this function will likely create an overlap with 1 or more entries,
+; the caller must resolve this
+reserve_bootloader:
     movzx eax, byte [e820_arr_len]
+    cmp eax, 255
+    jne .normal
+    dec eax ; just discard the last entry, it can't be that important
+    dec byte [e820_arr_len]
+    .normal:
+
     mov ebx, eax
     shl eax, 4
     shl ebx, 2
     add eax, ebx
-
-    mov edx, eax
-    dec edx
-
-    ; dest = dest + n - 1
-    mov ebx, e820_arr + 20
-    add ebx, edx
-
-    ; src = src + n - 1
-    mov ecx, e820_arr
-    add ecx, edx
-
-    ; shift entries forward by 20 bytes
-    .loop:
-        test eax, eax
-        jz .endloop
-
-        mov dl, byte [ecx]
-        mov byte [ebx], dl
-
-        dec ecx
-        dec ebx
-        dec eax
-        jmp .loop
-
-    .endloop:
-
-    ; insert new entry representing the IVT and BDA
-    mov eax, e820_arr
+    add eax, e820_arr
+    
     mov dword [eax + e820_base_offset], 0
     mov dword [eax + e820_base_offset + 4], 0
-    mov dword [eax + e820_length_offset], 1280
+    mov dword [eax + e820_length_offset], 0x10000
     mov dword [eax + e820_length_offset + 4], 0
-    mov dword [eax + e820_type_offset], e820_BIOS_RECLAIMABLE
+    mov dword [eax + e820_type_offset], e820_BOOTLOADER_RECLAIMABLE
     add byte [e820_arr_len], 1
+    ret
 
-    .end:
+; sort system address map by start address using bubble sort,
+; (why not some other algorithm? because e820 entries are usually already mostly sorted,
+; and we need to avoid reserving extra memory during the sort)
+sort_smap:
+    sreg esi, edi
+    .outer:
+    mov eax, e820_arr
+
+    mov ebx, [e820_arr_len]
+    mov edx, ebx
+    shl ebx, 4
+    shl edx, 2
+    add ebx, edx ; ebx = len(e820_arr)
+
+    xor ecx, ecx ; ecx = i
+    mov edx, 20 ; edx = i + 1
+
+    .loop:
+        cmp edx, ebx
+        je .sorted
+
+        ; just in case there are entries
+        ; in the 64-bit address space
+        mov esi, [eax + ecx + 4]
+        mov edi, [eax + edx + 4]
+        cmp esi, edi
+        ja .unsorted
+
+        ; A > B yet A before B?
+        mov esi, [eax + ecx]
+        mov edi, [eax + edx]
+        cmp esi, edi
+        ja .unsorted
+
+        add ecx, 20
+        add edx, 20
+        jmp .loop
+
+    .sorted:
+        rreg esi, edi
+        ret
+
+    .unsorted:
+        ; swap base
+        mov esi, [eax + ecx]
+        mov edi, [eax + edx]
+        mov [eax + ecx], edi
+        mov [eax + edx], esi
+
+        mov esi, [eax + ecx + 4]
+        mov edi, [eax + edx + 4]
+        mov [eax + ecx + 4], edi
+        mov [eax + edx + 4], esi
+
+        ; swap length
+        mov esi, [eax + ecx + e820_length_offset]
+        mov edi, [eax + edx + e820_length_offset]
+        mov [eax + ecx + e820_length_offset], edi
+        mov [eax + edx + e820_length_offset], esi
+
+        mov esi, [eax + ecx + e820_length_offset + 4]
+        mov edi, [eax + edx + e820_length_offset + 4]
+        mov [eax + ecx + e820_length_offset + 4], edi
+        mov [eax + edx + e820_length_offset + 4], esi
+
+        ; swap type
+        mov esi, [eax + ecx + e820_type_offset]
+        mov edi, [eax + edx + e820_type_offset]
+        mov [eax + ecx + e820_type_offset], edi
+        mov [eax + edx + e820_type_offset], esi
+
+        jmp .outer
+        ret
+
+; check for, and resolve overlaps in smap entries by
+; marking the overlap with the more restrictive type
+resolve_overlaps_smap:
+    ret
+
+; merge adjacent entries of the same type in the system address map
+merge_entries_smap:
     ret
 
 protected_mode:
@@ -678,14 +725,13 @@ protected_mode:
     lstr eax, `Entered protected mode.\r\n`
     call bios_puts32
 
-    ; todo: sort and merge e820 entries, and resolve overlaps, currently it's fine because we're in QEMU and SeaBIOS is nice,
-    ; but we can't expect the same out of real BIOSes
+    ; make sure physical allocator does not overwrite our stack or code
+    call reserve_bootloader
 
-    ; since our physical memory allocator returns 0 to indicate failure,
-    ; allowing it to allocate from the first 1280 bytes would make it possibly return 0 as the actual address,
-    ; thus causing the bootloader to fail as it thinks it has no memory,
-    ; though technically this memory is reclaimable by the forth image later.
-    call reserve_ivt_and_bda
+    ; todo: sort and merge e820 entries, and resolve overlaps
+    call sort_smap
+    call resolve_overlaps_smap
+    call merge_entries_smap
 
     lstr eax, `Printing memory map:\r\n`
     call bios_puts32
@@ -764,6 +810,9 @@ parse_image:
         dec edi
         jmp .loop
     .end:
+
+    lstr eax, `Printing post-load memory map:\r\n`
+    call bios_puts32
 
     call print_mmap
 
