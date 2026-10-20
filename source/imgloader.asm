@@ -446,11 +446,16 @@ balloc: ; args: size, alignment, type
         add eax, edi
         and eax, ebx
 
+        ; skip if aligning base overflowed
+        cmp eax, [e820_arr + ecx + e820_base_offset]
+        jb .skip
+
         ; edx now has the post-alignment length of the entry, eax still has the aligned start
         mov ebx, eax
         sub ebx, [e820_arr + ecx + e820_base_offset]
         mov edx, [e820_arr + ecx + e820_length_offset]
         sub edx, ebx
+        jc .skip ; underflow check
 
         ; reject entries too short to satisfy allocation
         cmp edx, esi
@@ -743,7 +748,7 @@ resolve_overlaps_smap:
 
     .overlap:
         ; resolve overlap
-        lstr eax, `Found overlap, resolving...`
+        lstr eax, `Found overlap, resolving...\r\n`
         call bios_puts32
 
         ; todo: actually resolve that overlap
@@ -753,6 +758,7 @@ resolve_overlaps_smap:
 
 ; merge adjacent entries of the same type in the system address map
 merge_entries_smap:
+    ; todo
     ret
 
 protected_mode:
@@ -776,7 +782,7 @@ protected_mode:
     call bios_puts32
 
     ; make sure physical allocator does not overwrite our stack or code
-    lstr eax, `Reserving memory for bootloader.\r\n.`
+    lstr eax, `Reserving memory for bootloader.\r\n`
     call bios_puts32
     call reserve_bootloader
 
@@ -784,11 +790,11 @@ protected_mode:
     call bios_puts32
     call sort_smap
 
-    lstr eax, `Resolving overlaps...\r\n`
+    lstr eax, `Resolving overlaps.\r\n`
     call bios_puts32
     call resolve_overlaps_smap
 
-    lstr eax, `Merging entries...\r\n`
+    lstr eax, `Merging entries.\r\n`
     call bios_puts32
     call merge_entries_smap
 
