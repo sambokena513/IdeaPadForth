@@ -700,12 +700,24 @@ sort_smap:
         mov [eax + ecx + e820_type_offset], edi
         mov [eax + edx + e820_type_offset], esi
 
-        jmp .outer
+        ; backtrack in case this is not the final position,
+        ; this makes our algorithm O(n) instead of O(n^2) for
+        ; the case where the list was already sorted, save for one element
+        sub ecx, 20
+        sub edx, 20
+        jmp .loop
         ret
 
-; check for, and resolve overlaps in smap entries by
+; Check for, and resolve overlaps in SMAP entries by
 ; marking the overlap with the more restrictive type,
-; note that this only checks overlap at the beginning (relying on the list being sorted)
+; Note; this only checks overlap at the beginning (relying on the list being sorted).
+; Also, this is O(n^3), more specifically, it performs up to 255*254/2 * 255 abstract operations,
+; or in other words 8258175, so just over 8 million.
+
+; Should be fine since our CPU has a 1.6GHz clock,
+; though eventually I might replace it with the more standard way that Linux uses, where you turn the list
+; into boundary events, sort those, and then keep track of active types using a multiset, doing a sweep-line pass
+; to build the sanitized array.
 resolve_overlaps_smap:
     sreg esi, edi
     .outer:
@@ -734,9 +746,11 @@ resolve_overlaps_smap:
 
         ; compare A.end with B.start
         cmp [eax + edx + 4], edi
-        jb .overlap
+        ja .overlap
+        je .skip
         cmp [eax + edx], esi
-        jbe .overlap
+        jb .overlap
+        .skip:
 
         add ecx, 20
         add edx, 20
@@ -751,7 +765,22 @@ resolve_overlaps_smap:
         lstr eax, `Found overlap, resolving...\r\n`
         call bios_puts32
 
-        ; todo: actually resolve that overlap
+        ; todo
+
+        ; all overlap cases:
+            ; exact match: entry with more restrictive type wins, other entry is removed
+            ; A.start == B.start, A.end < B.end:
+                ; If A is more restrictive Then B.start += A.length; B.length -= A.length
+                ; Else A is removed
+            ; A.start < B.start, A.end == B.end:
+                ; If A is more restrictive Then B is removed
+                ; Else A.length -= B.length
+            ; A.start < B.start, A.end > B.end:
+                ; If A is more restrictive Then B is removed
+                ; Else append new e820_entry(B.end, A.end - B.end, A.type); A.length := (B.start - A.start)
+            ; A.start < B.start, A.end < B.end:
+                ; If A is more restrictive Then B.start += (A.end - B.start); B.length -= (A.end - B.start)
+                ; Else A.length -= (A.end - B.start)
 
         jmp .outer
         ret
@@ -762,7 +791,8 @@ merge_entries_smap:
     ret
 
 protected_mode:
-    ; by now we should be in protected mode with flat segmentation, BIOS functions will no longer work
+    ; by now we should be in protected mode with flat segmentation,
+    ; BIOS functions will no longer work directly (since we haven't loaded an IDT we can still call them with a modeswitch)
 
     ; initialize segment registers
     mov ax, 0x10
