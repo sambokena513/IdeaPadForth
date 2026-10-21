@@ -634,7 +634,7 @@ sort_smap:
     .outer:
     mov eax, e820_arr
 
-    mov ebx, [e820_arr_len]
+    movzx ebx, byte [e820_arr_len]
     mov edx, ebx
     shl ebx, 4
     shl edx, 2
@@ -703,8 +703,16 @@ sort_smap:
         ; backtrack in case this is not the final position,
         ; this makes our algorithm O(n) instead of O(n^2) for
         ; the case where the list was already sorted, save for one element
+        test ecx, ecx
+        jmp .continue
+
         sub ecx, 20
         sub edx, 20
+        jmp .loop
+
+        .continue:
+        add ecx, 20
+        add edx, 20
         jmp .loop
         ret
 
@@ -723,7 +731,7 @@ resolve_overlaps_smap:
     .outer:
     mov eax, e820_arr
 
-    mov ebx, [e820_arr_len]
+    movzx ebx, byte [e820_arr_len]
     mov edx, ebx
     shl ebx, 4
     shl edx, 2
