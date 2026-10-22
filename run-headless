@@ -1,6 +1,7 @@
 #!/usr/bin/bash
 
 qemu-system-i386 \
+    -accel kvm \
     -machine pc-i440fx-10.2 \
     -cpu n270 \
     -smp 1 \

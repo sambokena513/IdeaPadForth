@@ -86,27 +86,53 @@ org 0x8000 ; start just after boot sector
 
 ; hang forever
 %macro HANG16 0
-        %%hang:
-        %ifdef DEBUG
-            VGA_MARK16 10
-            VGA_MARK16 11
-            VGA_MARK16 12
-        %else
-            hlt
-        %endif
-        jmp %%hang
+    %%hang:
+    %ifdef DEBUG
+        VGA_MARK16 10
+        VGA_MARK16 11
+        VGA_MARK16 12
+    %else
+        hlt
+    %endif
+    jmp %%hang
 %endmacro
 
 %macro HANG32 0
-        %%hang:
-        %ifdef DEBUG
-            VGA_MARK32 20
-            VGA_MARK32 21
-            VGA_MARK32 22
-        %else
-            hlt
-        %endif
-        jmp %%hang
+    %%hang:
+    %ifdef DEBUG
+        VGA_MARK32 20
+        VGA_MARK32 21
+        VGA_MARK32 22
+    %else
+        hlt
+    %endif
+    jmp %%hang
+%endmacro
+
+; save volatile registers, ie. caller-saved registers
+%macro SAVEVOL32 0
+    sreg eax, ebx, ecx, edx
+%endmacro
+
+%macro RESVOL32 0
+    rreg eax, ebx, ecx, edx
+%endmacro
+
+; save persistent registers, ie. callee-saved registers
+%macro SAVEPER32 0
+    sreg esi, edi, ebp
+%endmacro
+
+%macro RESPER32 0
+    rreg esi, edi, ebp
+%endmacro
+
+; call bootloader function and save registers,
+; only works on functions that don't return anything (since registers are overwritten)
+%macro CALLB32 1
+    SAVEVOL32
+    call %1
+    RESVOL32
 %endmacro
 
 ; wait for a little bit
@@ -521,10 +547,10 @@ balloc: ; args: size, alignment, type
 
 ; read sectors into a low-memory buffer using BIOS EDD
 read_blocks_bios: ; args: lba, count
-    REAL
     ; BIOS functions are allowed to clobber registers,
     ; so we have to explicitly preserve all the callee-saved ones here
-    sreg esi, edi, ebp
+    SAVEPER32
+    REAL
 
     mov [DAPS_lba], eax ; 32-bit LBA is enough for loading the kernel
     mov [DAPS_sectors], bl ; should not exceed 127 because some BIOSes will error
@@ -538,8 +564,8 @@ read_blocks_bios: ; args: lba, count
     jnz fatal16
 
     cli ; BIOS might try to reenable interrupts, don't let it
-    rreg esi, edi, ebp
     PROT
+    RESPER32
     ret
 
 align 16, db 0
@@ -551,7 +577,7 @@ DAPS:
     DAPS_lba dq 0
 
 read_blocks: ; args: lba, count, buf
-    sreg esi, edi
+    SAVEPER32
 
     ; save count and buf since we'll be updating these
     mov edx, eax ; lba
@@ -570,7 +596,7 @@ read_blocks: ; args: lba, count, buf
         .normal:
 
         ; read blocks into low-memory buffer
-        call read_blocks_bios
+        CALLB32 read_blocks_bios
 
         add edx, ebx ; move disk cursor
         sub esi, ebx ; decrement the remaining count
@@ -597,7 +623,7 @@ read_blocks: ; args: lba, count, buf
         mov eax, edx
         mov ebx, esi
     .end:
-    rreg esi, edi
+    RESPER32
     ret
 
 ; mark the area containing the bootloader (0 - 0x10000) as BOOTLOADER_RESERVED
@@ -626,176 +652,159 @@ reserve_bootloader:
     add byte [e820_arr_len], 1
     ret
 
-; sort system address map by start address using bubble sort,
-; (why not some other algorithm? because e820 entries are usually already mostly sorted,
-; and we need to avoid reserving extra memory during the sort)
-sort_smap:
-    sreg esi, edi
-    .outer:
-    mov eax, e820_arr
+; ascending bubble sort implementation, args: arr, len, el_size, compare_func
+; compare_func must be a subroutine taking one argument el, and
+; returning -1, 0, or 1 for A < B, A == B, A > B respectively.
+sort:
+    SAVEPER32
 
-    movzx ebx, byte [e820_arr_len]
-    mov edx, ebx
-    shl ebx, 4
-    shl edx, 2
-    add ebx, edx ; ebx = len(e820_arr)
+    ; before doing anything, if there's nothing to sort, don't sort anything
+    cmp ebx, 2
+    jl .sorted
 
-    xor ecx, ecx ; ecx = i
-    mov edx, 20 ; edx = i + 1
+    mov ebp, eax ; copy arr start into ebp
+    imul ebx, ecx
+    add ebx, eax
+    ; since we read both i and i + 1 but compare i against
+    ; the limit the limit must be 1 smaller to prevent a bounds error on i + 1
+    sub ebx, ecx
+    xor edi, edi ; edi holds the status of if the array was changed or not
+    
+    ; eax - cursor, ebx - limit, ecx - stride, edx - compare
 
     .loop:
-        cmp edx, ebx
+        test edi, edi
+        jnz .changed
+
+        cmp eax, ebx
         je .sorted
+        jmp .normal
 
-        ; just in case there are entries
-        ; in the 64-bit address space
-        mov esi, [eax + ecx + 4]
-        mov edi, [eax + edx + 4]
-        cmp esi, edi
-        ja .unsorted
-        jb .skip
+        ; we can't blindly exit the loop without doing an
+        ; extra pass to verify the array is sorted
+        .changed:
+        cmp eax, ebx
+        jne .normal
+        xor edi, edi ; clear "swapped" flag
+        mov eax, ebp ; reset cursor
+        jmp .loop
+        .normal:
 
-        ; A > B yet A before B?
-        mov esi, [eax + ecx]
-        mov edi, [eax + edx]
-        cmp esi, edi
-        ja .unsorted
+        ; call compare_func on el
+        SAVEVOL32
+        call edx
+        mov esi, eax
+        RESVOL32
 
-        .skip:
+        ; A > B despite coming before it
+        cmp esi, 1
+        je .unsorted
 
-        add ecx, 20
-        add edx, 20
+        add eax, ecx
         jmp .loop
 
     .sorted:
-        rreg esi, edi
+        RESPER32
         ret
 
     .unsorted:
-        ; swap base
-        mov esi, [eax + ecx]
-        mov edi, [eax + edx]
-        mov [eax + ecx], edi
-        mov [eax + edx], esi
+        ; swap memory contents of adjacent elements
 
-        mov esi, [eax + ecx + 4]
-        mov edi, [eax + edx + 4]
-        mov [eax + ecx + 4], edi
-        mov [eax + edx + 4], esi
+        ; esi = i, edi = remaining
+        mov esi, eax
+        mov edi, ecx
 
-        ; swap length
-        mov esi, [eax + ecx + e820_length_offset]
-        mov edi, [eax + edx + e820_length_offset]
-        mov [eax + ecx + e820_length_offset], edi
-        mov [eax + edx + e820_length_offset], esi
+        sreg eax
+        .copy: ; uses eax and edi for temporaries
+            test edi, edi
+            jz .endcopy
 
-        mov esi, [eax + ecx + e820_length_offset + 4]
-        mov edi, [eax + edx + e820_length_offset + 4]
-        mov [eax + ecx + e820_length_offset + 4], edi
-        mov [eax + edx + e820_length_offset + 4], esi
+            ; swap one byte from element A to element B
+            mov al, [esi]
+            xchg al, [esi + ecx]
+            xchg [esi], al
 
-        ; swap type
-        mov esi, [eax + ecx + e820_type_offset]
-        mov edi, [eax + edx + e820_type_offset]
-        mov [eax + ecx + e820_type_offset], edi
-        mov [eax + edx + e820_type_offset], esi
+            inc esi
+            dec edi
+            jmp .copy
+        .endcopy:
+        rreg eax
 
-        ; backtrack in case this is not the final position,
-        ; this makes our algorithm O(n) instead of O(n^2) for
-        ; the case where the list was already sorted, save for one element
-        test ecx, ecx
-        jmp .continue
-
-        sub ecx, 20
-        sub edx, 20
+        add eax, ecx
+        mov edi, 1 ; mark the array as changed
         jmp .loop
 
-        .continue:
-        add ecx, 20
-        add edx, 20
-        jmp .loop
-        ret
+; compare two boundary events
+event_compare:
+    ; first compare addresses
+    mov ebx, [eax + 4]
+    cmp ebx, [eax + 4 + 16]
+    ja .greater
+    jb .smaller
 
-; Check for, and resolve overlaps in SMAP entries by
-; marking the overlap with the more restrictive type,
-; Note; this only checks overlap at the beginning (relying on the list being sorted).
-; Also, this is O(n^3), more specifically, it performs up to 255*254/2 * 255 abstract operations,
-; or in other words 8258175, so just over 8 million.
+    mov ebx, [eax]
+    cmp ebx, [eax + 16]
+    ja .greater
+    jb .smaller
 
-; Should be fine since our CPU has a 1.6GHz clock,
-; though eventually I might replace it with the more standard way that Linux uses, where you turn the list
-; into boundary events, sort those, and then keep track of active types using a multiset, doing a sweep-line pass
-; to build the sanitized array.
-resolve_overlaps_smap:
-    sreg esi, edi
-    .outer:
-    mov eax, e820_arr
+    ; if addresses are equal, type decides
+    mov ebx, [eax + 8]
+    cmp ebx, [eax + 8 + 16]
+    jz .greater
+    jnz .smaller
 
-    movzx ebx, byte [e820_arr_len]
-    mov edx, ebx
-    shl ebx, 4
-    shl edx, 2
-    add ebx, edx ; ebx = len(e820_arr)
+    ; if addresses and types are equal, ordering is equal
+    .equal:
+    xor eax, eax
+    ret
+    .smaller:
+    mov eax, -1
+    ret
+    .greater:
+    mov eax, 1
+    ret
 
-    xor ecx, ecx ; ecx = i
-    mov edx, 20 ; edx = i + 1
+; compare two e820 entries' start addresses
+entry_compare:
+    mov ebx, [eax]
+    mov ecx, [eax + 4]
 
-    .loop:
-        cmp edx, ebx
-        je .done
+    cmp ebx, [eax + 20]
+    ja .greater
+    jb .smaller
+    cmp ecx, [eax + 4 + 20]
+    ja .greater
+    jb .smaller
 
-        ; if A.end := (A.start + A.length) >= B.start
+    .equal:
+    xor eax, eax
+    ret
+    .smaller:
+    mov eax, -1
+    ret
+    .greater:
+    mov eax, 1
+    ret
 
-        ; calculate end and put lower half in esi and upper half in edi
-        mov esi, [eax + ecx]
-        mov edi, [eax + ecx + 4]
-        add esi, [eax + ecx + 8]
-        adc edi, [eax + ecx + 12]
+; Sanitize e820_arr, resolving overlaps, merging adjacent entries, and sorting it.
+; Heavily inspired by e820_update_table in arch/x86/kernel/e820.c in the linux kernel.
 
-        ; compare A.end with B.start
-        cmp [eax + edx + 4], edi
-        ja .overlap
-        je .skip
-        cmp [eax + edx], esi
-        jb .overlap
-        .skip:
+; O(n^2) time complexity due to using bubble sort to sort the event array.
+; O(n) space complexity due to keeping track of a few temporary arrays.
+; For temporary allocations we use the 32KB starting at BBUFADDR.
 
-        add ecx, 20
-        add edx, 20
-        jmp .loop
+; uses this struct for boundary events:
 
-    .done:
-        rreg esi, edi
-        ret
+;    dq address
+;    dd type ; either start or end, 4 bytes instead of 1 for alignment, zero means start, nonzero means end
+;    dd mem_type ; e820_entry memory type
 
-    .overlap:
-        ; resolve overlap
-        lstr eax, `Found overlap, resolving...\r\n`
-        call bios_puts32
+sanitize_smap:
+    ; todo, make boundary event array
 
-        ; todo
+    ; todo, sort boundary event array
 
-        ; all overlap cases:
-            ; exact match: entry with more restrictive type wins, other entry is removed
-            ; A.start == B.start, A.end < B.end:
-                ; If A is more restrictive Then B.start += A.length; B.length -= A.length
-                ; Else A is removed
-            ; A.start < B.start, A.end == B.end:
-                ; If A is more restrictive Then B is removed
-                ; Else A.length -= B.length
-            ; A.start < B.start, A.end > B.end:
-                ; If A is more restrictive Then B is removed
-                ; Else append new e820_entry(B.end, A.end - B.end, A.type); A.length := (B.start - A.start)
-            ; A.start < B.start, A.end < B.end:
-                ; If A is more restrictive Then B.start += (A.end - B.start); B.length -= (A.end - B.start)
-                ; Else A.length -= (A.end - B.start)
-
-        jmp .outer
-        ret
-
-; merge adjacent entries of the same type in the system address map
-merge_entries_smap:
-    ; todo
+    ; todo, loop over boundary events and emit entries
     ret
 
 protected_mode:
@@ -824,17 +833,18 @@ protected_mode:
     call bios_puts32
     call reserve_bootloader
 
-    lstr eax, `Sorting memory map.\r\n`
+    lstr eax, `Sanitizing memory map.\r\n`
     call bios_puts32
-    call sort_smap
+    call sanitize_smap
 
-    lstr eax, `Resolving overlaps.\r\n`
-    call bios_puts32
-    call resolve_overlaps_smap
+    call print_mmap
 
-    lstr eax, `Merging entries.\r\n`
-    call bios_puts32
-    call merge_entries_smap
+    ; sort entries by address
+    mov eax, e820_arr
+    movzx ebx, byte [e820_arr_len]
+    mov ecx, 20
+    mov edx, entry_compare
+    call sort
 
     lstr eax, `Printing memory map:\r\n`
     call bios_puts32
@@ -877,7 +887,7 @@ parse_image:
         je .end
 
         ; print amount of memory the section takes up
-        sreg eax, ebx, ecx, edx
+        SAVEVOL32
         lstr eax, `Requesting 0x`
         call bios_puts32
         mov eax, [esi + 4]
@@ -885,7 +895,7 @@ parse_image:
         call bios_puth32
         lstr eax, ` bytes of memory to load image section.\r\n`
         call bios_puts32
-        rreg eax, ebx, ecx, edx
+        RESVOL32
 
         ; allocate memory for section
         mov eax, [esi + 4] ; size
