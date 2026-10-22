@@ -829,12 +829,12 @@ sanitize_smap:
 
             ; base
             mov edx, [eax]
-            mov [ecx], edx
             mov esi, [eax + 4]
+            mov [ecx], edx
             mov [ecx + 4], esi
 
             ; type
-            mov [ecx + 8], 0
+            mov dword [ecx + 8], 0
 
             ; memtype
             mov edi, [eax + 16]
@@ -842,14 +842,16 @@ sanitize_smap:
 
         ; end event
 
-            ; base
-            mov edx, [eax + 8]
-            mov [ecx], edx
-            mov esi, [eax + 8 + 4]
+            ; base + length
+            mov edx, [eax]
+            mov esi, [eax + 4]
+            add edx, [eax + 8]
+            adc esi, [eax + 8 + 4]
+            mov [ecx + 16], edx
             mov [ecx + 16 + 4], esi
 
             ; type
-            mov [ecx + 16 + 8], -1
+            mov dword [ecx + 16 + 8], -1
 
             ; memtype
             mov edi, [eax + 16]
@@ -869,7 +871,60 @@ sanitize_smap:
     mov edx, event_compare
     call sort
 
-    ; todo, loop over boundary events and emit entries
+    ; loop over boundary events and emit entries,
+    ; eax is the event arr cursor, ebx is the limit,
+    ; and ecx is the e820_arr cursor
+    mov eax, BBUFADDR + 16
+    mov ebx, [BBUFADDR]
+    shl ebx, 4 ; 16 bytes
+    add ebx, eax
+    mov ecx, e820_arr
+    .process_event:
+        cmp eax, ebx
+        je .end_event_processing
+
+        %ifdef DEBUG
+            SAVEVOL32
+            SAVEPER32
+            mov ebp, eax
+
+            lstr eax, `----EVENT----\r\n`
+            call bios_puts32
+
+            lstr eax, `ADDRESS = 0x`
+            call bios_puts32
+            mov eax, [ebp + 4]
+            call bios_puth32
+            mov eax, [ebp]
+            call bios_puth32
+            lstr eax, `\r\n`
+            call bios_puts32
+
+            lstr eax, `TYPE = 0x`
+            call bios_puts32
+            mov eax, [ebp + 8]
+            call bios_puth32
+            lstr eax, `\r\n`
+            call bios_puts32
+
+            lstr eax, `MEMTYPE = 0x`
+            call bios_puts32
+            mov eax, [ebp + 12]
+            call bios_puth32
+            lstr eax, `\r\n`
+            call bios_puts32
+
+            lstr eax, `-----END-----\r\n`
+            call bios_puts32
+
+            RESPER32
+            RESVOL32
+        %endif
+
+        add eax, 16
+        add ecx, 20
+        jmp .process_event
+    .end_event_processing:
 
     RESPER32
     ret
@@ -903,15 +958,6 @@ protected_mode:
     lstr eax, `Sanitizing memory map.\r\n`
     call bios_puts32
     call sanitize_smap
-
-    call print_mmap
-
-    ; sort entries by address
-    mov eax, e820_arr
-    movzx ebx, byte [e820_arr_len]
-    mov ecx, 20
-    mov edx, entry_compare
-    call sort
 
     lstr eax, `Printing memory map:\r\n`
     call bios_puts32
@@ -990,6 +1036,13 @@ parse_image:
         dec edi
         jmp .loop
     .end:
+
+    ; sort entries by address
+    mov eax, e820_arr
+    movzx ebx, byte [e820_arr_len]
+    mov ecx, 20
+    mov edx, entry_compare
+    call sort
 
     lstr eax, `Printing post-load memory map:\r\n`
     call bios_puts32
