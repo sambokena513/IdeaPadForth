@@ -800,6 +800,44 @@ entry_compare:
 ;    dd type ; either start or end, 4 bytes instead of 1 for alignment, zero means start, nonzero means end
 ;    dd mem_type ; e820_entry memory type
 
+%macro PRINT_EVENT 0
+    SAVEVOL32
+    SAVEPER32
+    mov ebp, eax
+
+    lstr eax, `----EVENT----\r\n`
+    call bios_puts32
+
+    lstr eax, `ADDRESS = 0x`
+    call bios_puts32
+    mov eax, [ebp + 4]
+    call bios_puth32
+    mov eax, [ebp]
+    call bios_puth32
+    lstr eax, `\r\n`
+    call bios_puts32
+
+    lstr eax, `TYPE = 0x`
+    call bios_puts32
+    mov eax, [ebp + 8]
+    call bios_puth32
+    lstr eax, `\r\n`
+    call bios_puts32
+
+    lstr eax, `MEMTYPE = 0x`
+    call bios_puts32
+    mov eax, [ebp + 12]
+    call bios_puth32
+    lstr eax, `\r\n`
+    call bios_puts32
+
+    lstr eax, `-----END-----\r\n`
+    call bios_puts32
+
+    RESPER32
+    RESVOL32
+%endmacro
+
 sanitize_smap:
     SAVEPER32
     ; set up length of event array
@@ -871,58 +909,43 @@ sanitize_smap:
     mov edx, event_compare
     call sort
 
-    ; loop over boundary events and emit entries,
-    ; eax is the event arr cursor, ebx is the limit,
-    ; and ecx is the e820_arr cursor
+    ; eax = event arr cursor, ebx = limit, ecx = e820_arr cursor
     mov eax, BBUFADDR + 16
     mov ebx, [BBUFADDR]
     shl ebx, 4 ; 16 bytes
     add ebx, eax
     mov ecx, e820_arr
+
+    ; last_addr = esi:edi
+    xor edi, edi
+    xor esi, esi
+
+    ; ebp = active_types, edx = active_types cursor
+    mov ebp, BBUFADDR + (16 * 1024)
+    mov edx, ebp
+
+    ; loop over boundary events and emit entries
     .process_event:
         cmp eax, ebx
         je .end_event_processing
 
         %ifdef DEBUG
-            SAVEVOL32
-            SAVEPER32
-            mov ebp, eax
-
-            lstr eax, `----EVENT----\r\n`
-            call bios_puts32
-
-            lstr eax, `ADDRESS = 0x`
-            call bios_puts32
-            mov eax, [ebp + 4]
-            call bios_puth32
-            mov eax, [ebp]
-            call bios_puth32
-            lstr eax, `\r\n`
-            call bios_puts32
-
-            lstr eax, `TYPE = 0x`
-            call bios_puts32
-            mov eax, [ebp + 8]
-            call bios_puth32
-            lstr eax, `\r\n`
-            call bios_puts32
-
-            lstr eax, `MEMTYPE = 0x`
-            call bios_puts32
-            mov eax, [ebp + 12]
-            call bios_puth32
-            lstr eax, `\r\n`
-            call bios_puts32
-
-            lstr eax, `-----END-----\r\n`
-            call bios_puts32
-
-            RESPER32
-            RESVOL32
+            PRINT_EVENT
         %endif
 
+        ; todo: if last_addr != event.addr,
+        ; emit e820 entry with most restrictive type in the active array
+
+        ; todo: if event.type is zero,
+        ; add event.memtype to active array
+
+        ; todo: if event.type is nonzero,
+        ; remove event.memtype from active array
+
+        mov esi, [eax]
+        mov edi, [eax + 4]
+
         add eax, 16
-        add ecx, 20
         jmp .process_event
     .end_event_processing:
 
