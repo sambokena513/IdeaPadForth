@@ -1,5 +1,0 @@
-bits 32
-
-mov eax, 5
-mov ecx, 10
-mul eax, ecx
