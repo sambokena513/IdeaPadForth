@@ -750,6 +750,7 @@ event_compare:
     ; if addresses are equal, type decides
     mov ebx, [eax + 8]
     cmp ebx, [eax + 8 + 16]
+    je .equal
     jz .greater
     jnz .smaller
 
@@ -800,11 +801,77 @@ entry_compare:
 ;    dd mem_type ; e820_entry memory type
 
 sanitize_smap:
-    ; todo, make boundary event array
+    SAVEPER32
+    ; set up length of event array
+    movzx eax, byte [e820_arr_len]
+    shl eax, 1 ; each entry contributes a start and end event
+    mov [BBUFADDR], eax ; length of event arr
 
-    ; todo, sort boundary event array
+    ; set up eax as loop cursor and ebx as limit,
+    ; ecx is an extra cursor for the event array
+    mov ebx, eax
+    shl eax, 4
+    shl ebx, 2
+    add ebx, eax
+    add ebx, e820_arr
+    mov eax, e820_arr
+    mov ecx, BBUFADDR + 16
+
+    ; add boundary events for each e820 entry
+    .add_event:
+        cmp eax, ebx
+        je .end_event_adding
+
+        ; reason for using esi, and edi here is to
+        ; prevent instruction dependencies slowing the CPU
+
+        ; start event
+
+            ; base
+            mov edx, [eax]
+            mov [ecx], edx
+            mov esi, [eax + 4]
+            mov [ecx + 4], esi
+
+            ; type
+            mov [ecx + 8], 0
+
+            ; memtype
+            mov edi, [eax + 16]
+            mov [ecx + 12], edi
+
+        ; end event
+
+            ; base
+            mov edx, [eax + 8]
+            mov [ecx], edx
+            mov esi, [eax + 8 + 4]
+            mov [ecx + 16 + 4], esi
+
+            ; type
+            mov [ecx + 16 + 8], -1
+
+            ; memtype
+            mov edi, [eax + 16]
+            mov [ecx + 16 + 12], edi
+
+        add ecx, 32
+        add eax, 20
+        jmp .add_event
+    .end_event_adding:
+
+    ; sort boundary events in ascending order by address,
+    ; with the tie-breaker being the type (start|end),
+    ; end events come before start events
+    mov eax, BBUFADDR + 16
+    mov ebx, [BBUFADDR]
+    mov ecx, 16
+    mov edx, event_compare
+    call sort
 
     ; todo, loop over boundary events and emit entries
+
+    RESPER32
     ret
 
 protected_mode:
