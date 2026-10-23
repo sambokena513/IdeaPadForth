@@ -787,19 +787,50 @@ entry_compare:
     mov eax, 1
     ret
 
-; Sanitize e820_arr, resolving overlaps, merging adjacent entries, and sorting it.
-; Heavily inspired by e820_update_table in arch/x86/kernel/e820.c in the linux kernel.
+; compare whether one active memory type is more restrictive than another, args: A, B
+memtype_max:
+    mov ecx, 4 ; initialize with the priority for unknown types, which is the second highest
+    mov edx, 4
 
-; O(n^2) time complexity due to using bubble sort to sort the event array.
-; O(n) space complexity due to keeping track of a few temporary arrays.
-; For temporary allocations we use the 32KB starting at BBUFADDR.
+    ; assign scalar priority score to event A and event B,
+    ; storing in eax for A and edx for B
+    .get_priority_a:
+        cmp eax, 1
+        cmove ecx, [mempr1] ; usable RAM is the lowest priority
+        cmp eax, 2
+        cmove ecx, [mempr3] ; firmware reserved loses to unknown types and to NVS
+        cmp eax, 3
+        cmove ecx, [mempr2] ; ACPI_RECLAIMABLE is reclaimable, and therefore loses to everything but usable RAM
+        cmp eax, 4
+        cmove ecx, [mempr4] ; NVS only loses to bad memory
+        cmp eax, 5
+        cmove ecx, [mempr5] ; bad memory should override everything else since it could be dangerous to access it
 
-; uses this struct for boundary events:
+    .get_priority_b:
+        cmp ebx, 1
+        cmove edx, [mempr1]
+        cmp ebx, 2
+        cmove edx, [mempr3]
+        cmp ebx, 3
+        cmove edx, [mempr2]
+        cmp ebx, 4
+        cmove edx, [mempr4]
+        cmp ebx, 5
+        cmove edx, [mempr5]
 
-;    dq address
-;    dd type ; either start or end, 4 bytes instead of 1 for alignment, zero means start, nonzero means end
-;    dd mem_type ; e820_entry memory type
+    mov eax, ecx
+    cmp ecx, edx
+    cmovb eax, edx
+    ret
 
+; because CMOVcc can't deal with immediates
+mempr1 dd 1
+mempr2 dd 2
+mempr3 dd 3
+mempr4 dd 4
+mempr5 dd 5
+
+; macro for printing an event inside sanitize_smap
 %macro PRINT_EVENT 0
     SAVEVOL32
     SAVEPER32
@@ -838,8 +869,27 @@ entry_compare:
     RESVOL32
 %endmacro
 
+; Sanitize e820_arr, resolving overlaps, merging adjacent entries, and sorting it.
+; Heavily inspired by e820_update_table in arch/x86/kernel/e820.c in the linux kernel.
+
+; O(n^2) time complexity due to using bubble sort to sort the event array.
+; O(n) space complexity due to keeping track of a few temporary arrays.
+; For temporary allocations we use the 32KB starting at BBUFADDR.
+
+; uses this struct for boundary events:
+
+;    dq address
+;    dd type ; either start or end, 4 bytes instead of 1 for alignment, zero means start, nonzero means end
+;    dd mem_type ; e820_entry memory type
+
+; and this one for active memory types:
+
+; dd type
+; dd count
+
 sanitize_smap:
     SAVEPER32
+
     ; set up length of event array
     movzx eax, byte [e820_arr_len]
     shl eax, 1 ; each entry contributes a start and end event
@@ -916,16 +966,22 @@ sanitize_smap:
     add ebx, eax
     mov ecx, e820_arr
 
-    ; last_addr = esi:edi
-    xor edi, edi
+    ; last_addr = esi:edi, esi is the low half, edi is the high half
     xor esi, esi
+    xor edi, edi
 
-    ; ebp = active_types, edx = active_types cursor
+    ; edx = active_types, ebp = active_types limit
     mov ebp, BBUFADDR + (16 * 1024)
     mov edx, ebp
 
-    ; loop over boundary events and emit entries
+    mov byte [e820_arr_len], 0 ; since we'll be emitting new entries
+
+    ; loop over boundary events and emit entries,
+    ; the core idea is that the space between two boundary events represents an interval, 
+    ; and the active types represent how many and what kinds of intervals are currently unfinished
     .process_event:
+        cmp byte [e820_arr_len], 255 ; if we've filled the entry array then it would be useless to continue
+        je .end_event_processing
         cmp eax, ebx
         je .end_event_processing
 
@@ -933,18 +989,86 @@ sanitize_smap:
             PRINT_EVENT
         %endif
 
-        ; todo: if last_addr != event.addr,
-        ; emit e820 entry with most restrictive type in the active array
+        ; if last_addr != event.addr emit e820 entry with most restrictive type in the active array, advance ecx
+        cmp esi, [eax]
+        jne .addr_changed
+        cmp edi, [eax + 4]
+        je .same_addr
+        .addr_changed:
+            ; e820.base = last_addr
+            mov [ecx], esi
+            mov [ecx + 4], edi
 
-        ; todo: if event.type is zero,
-        ; add event.memtype to active array
+            ; e820.length = event.addr - last_addr
+            push dword [eax]
+            push dword [eax + 4]
 
-        ; todo: if event.type is nonzero,
-        ; remove event.memtype from active array
+            xchg esi, [eax]
+            xchg edi, [eax + 4]
+            sub esi, [eax]
+            sbb edi, [eax + 4]
+            mov [ecx + 8], esi
+            mov [ecx + 12], edi
 
+            pop dword [eax + 4]
+            pop dword [eax]
+
+            ; from now until the next event we don't need last_addr so we can reuse esi and edi
+            ; for loop variables to find the most restrictive active memtype
+
+            ; esi = max_priority, edi = max_priority_type
+            mov esi, 1
+            mov edi, 1
+            .check_type:
+                cmp edx, ebp
+                je .end_check_type
+
+                SAVEVOL32
+                mov eax, edi
+                mov ebx, [edx]
+                call memtype_max
+                cmp esi, eax
+                jne .new_max
+                RESVOL32
+                jmp .after_max
+                .new_max:
+                    mov esi, eax
+                    RESVOL32
+                    mov edi, [edx]
+                .after_max:
+
+                add edx, 8
+                jmp .check_type
+            .end_check_type:
+            ; reset active_types cursor
+            mov edx, BBUFADDR + (16 * 1024)
+
+            ; e820.type = max_memtype(active_types)
+            mov [ecx + 16], edi
+
+            add ecx, 20
+            inc byte [e820_arr_len]
+            jmp .after_addr
+        .same_addr:
+
+        .after_addr:
+        
+        ; if event.type is zero, add event.memtype to active array
+        cmp dword [eax + 8], 0
+        jne .end_event
+            ; todo
+        jmp .after_type
+        ; if event.type is nonzero, remove event.memtype from active array
+        .end_event:
+            ; todo
+        .after_type:
+
+        ; last_addr = event.addr
         mov esi, [eax]
         mov edi, [eax + 4]
 
+        ; reset active_types cursor advance to next event
+        mov edx, BBUFADDR + (16 * 1024)
         add eax, 16
         jmp .process_event
     .end_event_processing:
