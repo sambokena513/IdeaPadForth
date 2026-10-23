@@ -993,7 +993,7 @@ sanitize_smap:
         cmp esi, [eax]
         jne .addr_changed
         cmp edi, [eax + 4]
-        je .same_addr
+        je .after_addr
         .addr_changed:
             ; e820.base = last_addr
             mov [ecx], esi
@@ -1048,27 +1048,43 @@ sanitize_smap:
 
             add ecx, 20
             inc byte [e820_arr_len]
-            jmp .after_addr
-        .same_addr:
-
         .after_addr:
         
         ; if event.type is zero, add event.memtype to active array
+        mov esi, [eax + 12]
         cmp dword [eax + 8], 0
         jne .end_event
-            ; todo
+            ; find and increment type freq
+            .add_type:
+                cmp edx, ebp
+                je .add_distinct_type
+
+                cmp esi, [edx]
+                je .end_add_type
+
+                add edx, 8
+                jmp .add_type
+            .end_add_type:
+                inc dword [edx + 4]
+                jmp .after_type
+            ; make new distinct type with freq 1
+            .add_distinct_type:
+            mov [ebp], esi
+            mov dword [ebp + 4], 1
+            add ebp, 8
         jmp .after_type
+
         ; if event.type is nonzero, remove event.memtype from active array
         .end_event:
             ; todo
         .after_type:
+        mov edx, BBUFADDR + (16 * 1024)
 
         ; last_addr = event.addr
         mov esi, [eax]
         mov edi, [eax + 4]
 
-        ; reset active_types cursor advance to next event
-        mov edx, BBUFADDR + (16 * 1024)
+        ; advance to next event
         add eax, 16
         jmp .process_event
     .end_event_processing:
