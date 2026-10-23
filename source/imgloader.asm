@@ -751,6 +751,7 @@ event_compare:
     mov ebx, [eax + 8]
     cmp ebx, [eax + 8 + 16]
     je .equal
+    test ebx, ebx
     jz .greater
     jnz .smaller
 
@@ -989,12 +990,18 @@ sanitize_smap:
             PRINT_EVENT
         %endif
 
-        ; if last_addr != event.addr emit e820 entry with most restrictive type in the active array, advance ecx
+        ; if last_addr != event.addr && there is an active type,
+        ; emit e820 entry with most restrictive type in the active array, advance ecx
         cmp esi, [eax]
         jne .addr_changed
         cmp edi, [eax + 4]
         je .after_addr
         .addr_changed:
+            cmp edx, ebp ; no active intervals
+            je .after_addr
+
+            ; todo: optimization; if type is equal to that of last emitted entry, lengthen that one instead of emitting a new one
+
             ; e820.base = last_addr
             mov [ecx], esi
             mov [ecx + 4], edi
@@ -1054,19 +1061,19 @@ sanitize_smap:
         mov esi, [eax + 12]
         cmp dword [eax + 8], 0
         jne .end_event
-            ; find and increment type freq
-            .add_type:
-                cmp edx, ebp
-                je .add_distinct_type
+        ; find and increment type freq
+        .add_type:
+            cmp edx, ebp
+            je .add_distinct_type
 
-                cmp esi, [edx]
-                je .end_add_type
+            cmp esi, [edx]
+            je .end_add_type
 
-                add edx, 8
-                jmp .add_type
+            add edx, 8
+            jmp .add_type
             .end_add_type:
-                inc dword [edx + 4]
-                jmp .after_type
+            inc dword [edx + 4]
+            jmp .after_type
             ; make new distinct type with freq 1
             .add_distinct_type:
             mov [ebp], esi
@@ -1076,7 +1083,23 @@ sanitize_smap:
 
         ; if event.type is nonzero, remove event.memtype from active array
         .end_event:
-            ; todo
+            .remove_type:
+            cmp esi, [edx]
+            je .reduce_freq
+            add edx, 8
+            jmp .remove_type
+
+            ; remove one instance
+            .reduce_freq:
+            dec dword [edx + 4]
+            cmp dword [edx + 4], 0
+            jne .after_type
+            ; remove last occurence
+            mov esi, [ebp - 8]
+            mov edi, [ebp - 4]
+            mov [edx], esi
+            mov [edx + 4], edi
+            sub ebp, 8
         .after_type:
         mov edx, BBUFADDR + (16 * 1024)
 
@@ -1200,17 +1223,12 @@ parse_image:
         jmp .loop
     .end:
 
-    ; sort entries by address
+    ; sort entries by address one more time for the new entries produced by the allocations we made
     mov eax, e820_arr
     movzx ebx, byte [e820_arr_len]
     mov ecx, 20
     mov edx, entry_compare
     call sort
-
-    lstr eax, `Printing post-load memory map:\r\n`
-    call bios_puts32
-
-    call print_mmap
 
 fix_pointers:
     ; todo: fix image pointers
