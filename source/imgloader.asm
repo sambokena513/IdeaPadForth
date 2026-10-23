@@ -971,7 +971,7 @@ sanitize_smap:
     xor esi, esi
     xor edi, edi
 
-    ; edx = active_types, ebp = active_types limit
+    ; edx = active_types cursor, ebp = active_types limit
     mov ebp, BBUFADDR + (16 * 1024)
     mov edx, ebp
 
@@ -1000,7 +1000,33 @@ sanitize_smap:
             cmp edx, ebp ; no active intervals
             je .after_addr
 
-            ; todo: optimization; if type is equal to that of last emitted entry, lengthen that one instead of emitting a new one
+            ; if entries are adjacent and same type, just
+            ; make the last one longer instead of emitting a new one
+            sreg edx, esi, edi
+            ; last_entry.type == event.memtype
+            mov edx, [eax + 12]
+            cmp edx, [ecx - 20 + 16]
+            jne .separate
+            ; last_entry.end == event.addr
+            mov esi, [ecx - 20]
+            mov edi, [ecx - 20 + 4]
+            add esi, [ecx - 20 + 8]
+            adc edi, [ecx - 20 + 12]
+            cmp esi, [eax]
+            jne .separate
+            cmp edi, [eax + 4]
+            jne .separate
+                ; last_entry.length = event.addr - last_entry.addr
+                mov esi, [eax]
+                mov edi, [eax + 4]
+                sub esi, [ecx - 20]
+                sbb edi, [ecx - 20 + 4]
+                mov [ecx - 20 + 8], esi
+                mov [ecx - 20 + 12], edi
+                rreg edx, esi, edi
+                jmp .after_addr
+            .separate:
+            rreg edx, esi, edi
 
             ; e820.base = last_addr
             mov [ecx], esi
