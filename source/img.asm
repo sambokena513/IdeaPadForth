@@ -34,9 +34,8 @@ addr0:
     times 256 db 0 ; runtime, nothing on disk
 
     dd %1 ; entry point word descriptor index
-    dd %0 ; number of section descriptors, + 1 over the actual amount of sections because of the reserved 0 idx
+    dd %0 - 1 ; number of section descriptors
 
-    dq 0 ; reserved for idx calculations to be simpler
     %rotate 1 ; discard wd idx arg
 
     ; loop through sections and emit the descriptors
@@ -73,10 +72,10 @@ addr0:
     %push impl_ctx
     %$impl_start:
 
-    dd %1
+    dd %2
     dd (%$impl_end - $$) - (%$impl_start - $$)
     dd 0 ; no IR for primitive/anonymous words
-    %2 %+ _IMPL: ; make this word's impl available to other macros
+    %1 %+ _IMPL: ; make this word's impl available to other macros
 %endmacro
 
 %macro END_IMPL 0
@@ -129,9 +128,9 @@ END_SECTION
 
 ; word implementation table
 START_SECTION IMPL_TABLE
-    IMPL_PRIM 1, INIT
+    IMPL_PRIM INIT, 1
         mov byte [0xb8000], 'Z' ; our "hello world", should print Z to the top left corner of the screen
-        ret ; should normally be unreachable, but in the first few bootstrap images we will ret
+        jmp $
     END_IMPL
 END_SECTION
 

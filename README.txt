@@ -222,7 +222,7 @@ On-Disk Image Format:
 
     The image starts at LBA 64, its first sector
     contains an image header starting halway through the sector,
-    consiting of image entry point (byte offset), number of persistent data
+    consisting of image entry point (word descriptor idx), number of persistent data
     structures, followed by disk block start:size pairs for each persistent data structure.
     Unless otherwise specified, assume fields are 32 bits.
 
@@ -257,15 +257,12 @@ On-Disk Image Format:
     Finally, the order of persistent data structures matters, a persistent
     data structure's index will be the same in the on-disk header and in memory
     once loaded, so for referencing data structure roots you need the index to be
-    stable, apart from that indices 0, 1, and 2 have special meanings.
+    stable, apart from that indices 0, and 1 have special meanings.
 
-    Index 0 - Reserved, should be empty on disk, but the in-memory header will
-    place the physical memory map here.
-
-    Index 1 - Word descriptor table, a pointer to the start of this data
+    Index 0 - Word descriptor table, a pointer to the start of this data
     structure can be expected to be in edi when the image is entered.
 
-    Index 2 - Word implementation table.
+    Index 1 - Word implementation table.
 
 
 Image Loading:

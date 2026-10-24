@@ -1200,11 +1200,10 @@ parse_image:
     mov dword [0x7c00], e820_arr
     mov dword [0x7c04], eax
 
-    ; edi gets the amount of real sections (-1 because of the extra 0 section)
-    ; and esi gets the address of the first valid section descriptor (once again, we skip index 0)
+    ; edi gets the amount of sections,
+    ; and esi gets the address of the first section descriptor
     mov edi, [0x7c00 + 256 + 4]
-    dec edi
-    mov esi, 0x7c00 + 256 + 16
+    mov esi, 0x7c00 + 256 + 8
 
     ; parse section descriptor, allocate memory, and read from disk
     .loop:
@@ -1223,6 +1222,7 @@ parse_image:
         RESVOL32
 
         ; allocate memory for section
+
         mov eax, [esi + 4] ; size
         shl eax, 9
         ; mark length in runtime header
@@ -1256,16 +1256,57 @@ parse_image:
     mov edx, entry_compare
     call sort
 
+    lstr eax, `Printing final memory map.\r\n`
+    call bios_puts32
+    call print_mmap
+
 fix_pointers:
-    ; todo: fix image pointers
+    mov edi, [0x7c08] ; edi points to start of word descriptor table
+
+    mov ebx, edi ; cursor
+    mov eax, [0x7c0c] ; limit
+
+    ; make limit a multiple of 12
+    sub eax, ebx
+    mov esi, 12
+    xor edx, edx
+    div esi
+    xor edx, edx
+    mul esi
+    add eax, ebx
+
+    mov ecx, [0x7c10] ; word impl table base
+
+    ; fix pointers from word descriptors to implementations
+    .loop:
+        cmp ebx, eax
+        je .end
+
+        ; since lengths of sections are
+        ; in LBA, we don't actually know
+        ; which of these word descriptors exist,
+        ; but adding a number to an undefined
+        ; descriptor should be fine,
+        ; since it's still a valid memory access
+        add [ebx], ecx
+
+        add ebx, 12
+        jmp .loop
+    .end:
 
 final:
-    ; todo: set up forth stacks
+    mov ebp, BBUFADDR ; initial stack is in the 32KB area previously used as a disk-read bounce buffer.
 
-    ; todo: enter image
+    mov eax, [0x7c00 + 256] ; word descriptor idx for image entry point
+    mov ebx, eax
+    shl eax, 3
+    shl ebx, 2
+    add eax, ebx ; word descriptors are 12 bytes each
+
+    call [edi + eax] ; enter image
 
 fallthrough:
-    lstr eax, `Reached end of bootloader code, if you are seeing this, it means the image handoff failed.\r\n`
+    lstr eax, `Reached end of bootloader code, if you are seeing this, it means the image returned unexpectedly.\r\n`
     call bios_puts32
     HANG32
 
