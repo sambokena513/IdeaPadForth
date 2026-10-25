@@ -6,4 +6,4 @@ if [ "$#" -ne 1 ]; then
     exit 1
 fi
 
-sudo dd if=./artefacts/disk.bin of="$1" count=128 status=progress
+sudo dd if=./artefacts/disk.bin of="$1" status=progress

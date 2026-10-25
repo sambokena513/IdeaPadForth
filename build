@@ -4,5 +4,4 @@ nasm -o "artefacts/boot.bin" -l "debug/boot.lst" "source/boot.asm" &&
 nasm -o "artefacts/imgloader.bin" -l "debug/imgloader.lst" "source/imgloader.asm" &&
 nasm -o "artefacts/img.bin" -l "debug/img.lst" "source/img.asm" &&
 
-cat "artefacts/boot.bin" "artefacts/imgloader.bin" "artefacts/img.bin" > "artefacts/disk.bin" &&
-truncate -s 1G "artefacts/disk.bin"
+cat "artefacts/boot.bin" "artefacts/imgloader.bin" "artefacts/img.bin" > "artefacts/disk.bin"
