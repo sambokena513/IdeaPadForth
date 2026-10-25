@@ -10,10 +10,19 @@
 
 
 
+; ------
+; MACROS
+; ------
+
 bits 32
 org 0 ; not actually loaded at 0x00000000, but this gives us simple relative label offsets
 
-addr0:
+; NULL is usually defined as 0, but in our case that'd be a bad idea
+; since it'd make a lot of section-relative pointers look invalid despite being valid
+; for instance a dictionary entry's link pointer being 0 shouldn't mean "invalid",
+; but rather simply "the first entry" (ie. offset of 0), on the other hand 0xffffffff
+; is actually always an invalid address on a 32-bit machine.
+%define NULL 0xffffffff
 
 ; align to logical block
 %define ALIGN_LBLK align 512, db 0
@@ -94,7 +103,7 @@ addr0:
 
 ; latest dict entry in assembler, NOT A RUNTIME VARIABLE!
 %push dict_ctx
-%define %$LATEST addr0
+%define %$LATEST NULL
 
 ; emit a dictionary entry,
 ; args are word label and external name
@@ -119,6 +128,16 @@ addr0:
     %endif
 %endmacro
 
+; call a word descriptor
+%macro FCALL 1
+    %define %%wd_offset ((%1 %+ _WD - $$) - (WD_TABLE_START - $$))
+    call [edi + %%wd_offset]
+%endmacro
+
+; ----
+; CODE
+; ----
+
 HEADER 0, WD_TABLE, IMPL_TABLE, DICT, GVCT_TABLE
 
 ; word descriptor table
@@ -129,15 +148,29 @@ END_SECTION
 ; word implementation table
 START_SECTION IMPL_TABLE
     IMPL_PRIM INIT, 1
-        mov byte [0xb8000], 'Z' ; our "hello world", should print Z to the top left corner of the screen
-        jmp $
+        ; our "hello world",
+        ; fills the screen with Z characters
+
+        xor eax, eax
+        .loop:
+            cmp eax, 2000 * 2
+            je .end
+
+            mov byte [0xb8000 + eax], 'Z'
+
+            add eax, 2
+            jmp .loop
+        .end:
+
+        .hang:
+            hlt
+            jmp .hang
+
     END_IMPL
 END_SECTION
 
 ; dictionary
 START_SECTION DICT
-    db 0 ; offset the first dictionary entry by 1 byte so we can distinguish between entry 0 and NULL
-
     DICT_ENTRY INIT, "INIT"
 END_SECTION
 

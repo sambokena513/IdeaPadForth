@@ -1,0 +1,5 @@
+1. Working bootloader that can load forth images. (Done)
+2. Single-tasking Forth that loops inside INTERPRET getting keyboard input and producing console output.
+3. Single-tasking Forth capable of reading a pre-made script from disk or USB mass storage to compile future extensions.
+4. Multi-tasking Forth.
+5. Multi-tasking Forth with an optimizing compiler (all the previous ones use subroutine-threading).
