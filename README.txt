@@ -170,6 +170,22 @@ Language design:
                 postitions. A concrete example would be `1 2 -`, this will
                 evaluate to +1, not -1.
 
+            Caller/Callee-saved Registers and Reserved Registers:
+                caller-saved - eax, ebx, ecx, edx
+                callee-saved - none
+
+                reserved - esi (TOS), edi (WD_TABLE start), ebp (&NOS + 4), esp (return stack)
+
+                Rationale:
+                    Function arguments go through the stack anyway so overhead
+                    would be relatively high regardless of how we split up the
+                    registers, and if we split them evenly we only get 2
+                    registers for use in leaf functions.
+
+                    By giving all four to leaf node functions we can make
+                    primitives noticeably faster (as well as some non-primitives
+                    if we do inlining), and lose almost nothing.
+
     Parallelism/Concurrency:
         Not a built-in language feature, though the planned library-level
         implementation is cooperative multitasking similar to SmolForth's <stdco.f>
