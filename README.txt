@@ -292,7 +292,7 @@ Image Loading:
 
         - [0x7c00]..[0x7c04] - Memory map.
         - [0x7c08]..[0x7c0c] - Word descriptor table.
-        - [0x7c10]..[0x7c10] - Word implementation table.
+        - [0x7c10]..[0x7c14] - Word implementation table.
         - [0x7c18]..[0x7c1c] - Dictionary.
         - [0x7c20]..[0x7c24] - Global variable & constant table.
         - ... - other persistent data structures.

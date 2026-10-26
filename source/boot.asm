@@ -44,9 +44,9 @@ start:
     ; `int 0x15, eax = 0xe820` to get extended memory
     int 0x12
     jc fatal
-    ; stage 2 starts at 32KB, and may occupy space up to 64KB,
+    ; stage 2 starts at 32KB, and may occupy space up to 128KB,
     ; so if we have less memory than that we can't boot
-    cmp ax, 64
+    cmp ax, 128
     jl fatal
 
     ; try to enable A20

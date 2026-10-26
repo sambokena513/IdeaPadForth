@@ -588,11 +588,12 @@ read_blocks: ; args: lba, count, buf
         cmp ebx, 0
         je .end
 
-        ; don't read more than 64 blocks (32KB) at a time
-        cmp ebx, 64
+        ; don't read more than 127 blocks (just under 64KB) at a time,
+        ; because some BIOSes will error
+        cmp ebx, 127
         jle .normal
         .too_high:
-        mov ebx, 64
+        mov ebx, 127
         .normal:
 
         ; read blocks into low-memory buffer
@@ -626,7 +627,7 @@ read_blocks: ; args: lba, count, buf
     RESPER32
     ret
 
-; mark the area containing the bootloader (0 - 0x10000) as BOOTLOADER_RESERVED
+; mark the area containing the bootloader (0 - 0x20000) as BOOTLOADER_RESERVED
 ; note; this only creates a new entry, it does not remove existing ones,
 ; meaning that using this function will likely create an overlap with 1 or more entries,
 ; the caller must resolve this
@@ -646,7 +647,7 @@ reserve_bootloader:
     
     mov dword [eax + e820_base_offset], 0
     mov dword [eax + e820_base_offset + 4], 0
-    mov dword [eax + e820_length_offset], 0x10000
+    mov dword [eax + e820_length_offset], 0x20000
     mov dword [eax + e820_length_offset + 4], 0
     mov dword [eax + e820_type_offset], e820_BOOTLOADER_RECLAIMABLE
     add byte [e820_arr_len], 1
@@ -1234,6 +1235,16 @@ parse_image:
         test eax, eax
         jz fatal32 ; if we cannot load image, bootloader failed
 
+        SAVEVOL32
+        sreg eax
+        lstr eax, `Received memory at 0x`
+        call bios_puts32
+        rreg eax
+        call bios_puth32
+        lstr eax, `\r\n`
+        call bios_puts32
+        RESVOL32
+
         ; move start and end of section into runtime header
         mov [esi - 256], eax
         add [esi - 256 + 4], eax
@@ -1302,6 +1313,17 @@ final:
     shl eax, 3
     shl ebx, 2
     add eax, ebx ; word descriptors are 12 bytes each
+
+    SAVEVOL32
+    sreg eax
+    lstr eax, `Entering image at address `
+    call bios_puts32
+    rreg eax
+    mov eax, [edi + eax]
+    call bios_puth32
+    lstr eax, `\r\n`
+    call bios_puts32
+    RESVOL32
 
     call [edi + eax] ; enter image
 

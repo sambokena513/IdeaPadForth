@@ -95,7 +95,7 @@ org 0 ; not actually loaded at 0x00000000, but this gives us simple relative lab
 ; emit a WordDesc struct for a chosen impl
 %macro WORD_DESC 2
     %1 %+ _WD:
-    dd %1 %+ _IMPL ; target
+    dd (%1 %+ _IMPL) - IMPL_TABLE_START ; target
     dd 0 ; new words start with generation 0
     dd %2 ; flags
 %endmacro
