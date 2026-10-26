@@ -162,8 +162,8 @@ HEADER 0, WD_TABLE, IMPL_TABLE, DICT, GVCT_TABLE
 ; word descriptor table
 START_SECTION WD_TABLE
     WORD_DESC INIT, 0
-    ; WORD_DESC SET_INT, 0
-    ; WORD_DESC PLACEHOLDER_INT, 0
+    WORD_DESC SET_INT, 0
+    WORD_DESC PLACEHOLDER_INT, 0
 END_SECTION
 
 ; word implementation table
@@ -171,15 +171,15 @@ START_SECTION IMPL_TABLE
     IMPL_PRIM INIT, 1
 
         ; set up int3 handler
-        ; DPUSH 2 ; PLACEHOLDER_INT
-        ; DPUSH 3 ; #BP
-        ; FCALL SET_INT
+        DPUSH 2 ; PLACEHOLDER_INT
+        DPUSH 3 ; #BP
+        FCALL SET_INT
 
         ; load IDT
-        ; mov eax, [0x7c20]
-        ; add dword [eax + (idtr - GVCT_TABLE_START) + 2], eax
-        ; lidt [eax + (idtr - GVCT_TABLE_START)]
-        ; sub dword [eax + (idtr - GVCT_TABLE_START) + 2], eax
+        mov eax, [0x7c20]
+        add dword [eax + (idtr - GVCT_TABLE_START) + 2], eax
+        lidt [eax + (idtr - GVCT_TABLE_START)]
+        sub dword [eax + (idtr - GVCT_TABLE_START) + 2], eax
 
         ; our "hello world",
         ; fills the screen with Z characters
@@ -195,7 +195,7 @@ START_SECTION IMPL_TABLE
             jmp .loop
         .end:
 
-        ; int3 ; test our interrupt handler, should triple-fault if we f'ed up
+        int3 ; test our interrupt handler, should triple-fault if we f'ed up
 
         .hang:
             hlt
@@ -206,69 +206,69 @@ START_SECTION IMPL_TABLE
     ; set that word's current implementation as the interrupt
     ; handler. Note that this does not set that *word* as the handler,
     ; but rather its *current impl*, if it is redefined then tough luck.
-    ; IMPL_PRIM SET_INT, 1
-    ;     ; set eax to the GVCT base
-    ;     mov eax, [0x7c20]
+    IMPL_PRIM SET_INT, 1
+        ; set eax to the GVCT base
+        mov eax, [0x7c20]
 
-    ;     ; ebx gets the offset into the IDT
-    ;     mov ebx, esi
-    ;     shl ebx, 3
+        ; ebx gets the offset into the IDT
+        mov ebx, esi
+        shl ebx, 3
 
-    ;     ; set ecx to the linear address of the word's impl
-    ;     DPOPR ecx
-    ;     mov edx, ecx
-    ;     shl ecx, 3
-    ;     shl edx, 2
-    ;     add ecx, edx
-    ;     add ecx, edi
+        ; set ecx to the linear address of the word's impl
+        DPOPR ecx
+        mov edx, ecx
+        shl ecx, 3
+        shl edx, 2
+        add ecx, edx
+        add ecx, edi ; now ecx has the pointer to the word desc with the impl
+        mov ecx, [ecx] ; dereference to get the imp ; dereference to get the impll
 
-    ;     ; offset 0..15
-    ;     mov word [eax + (idt_start - GVCT_TABLE_START) + ebx], cx
-    ;     shr ecx, 16
-    ;     ; offset 16..31
-    ;     mov word [eax + (idt_start - GVCT_TABLE_START) + ebx + 6], cx
+        ; offset 0..15
+        mov word [eax + (idt_start - GVCT_TABLE_START) + ebx], cx
+        shr ecx, 16
+        ; offset 16..31
+        mov word [eax + (idt_start - GVCT_TABLE_START) + ebx + 6], cx
 
-    ;     ; segment selector, the bootloader gives us flat segmentation
-    ;     ; with 0x08 being the code segment and 0x10 being the data segment
-    ;     mov word [eax + (idt_start - GVCT_TABLE_START) + ebx + 2], 0x08
+        ; segment selector, the bootloader gives us flat segmentation
+        ; with 0x08 being the code segment and 0x10 being the data segment
+        mov word [eax + (idt_start - GVCT_TABLE_START) + ebx + 2], 0x08
 
-    ;     ; zero field
-    ;     mov byte [eax + (idt_start - GVCT_TABLE_START) + ebx + 4], 0
+        ; zero field
+        mov byte [eax + (idt_start - GVCT_TABLE_START) + ebx + 4], 0
 
-    ;     ; type (32-bit interrupt gate) as well as DPL (0) and p (1)
-    ;     mov word [eax + (idt_start - GVCT_TABLE_START) + ebx + 5], 0x8e
+        ; type (32-bit interrupt gate) as well as DPL (0) and p (1)
+        mov byte [eax + (idt_start - GVCT_TABLE_START) + ebx + 5], 0x8e
 
-    ;     DPOP
-    ;     ret
-    ; END_IMPL
+        DPOP
+        ret
+    END_IMPL
 
-    ; placeholder interrupt handler
-    ; IMPL_PRIM PLACEHOLDER_INT, 1
-    ;     align 8
-    ;     inc byte [0x8b0000] ; so that it's visible something happened
-    ;     iret
-    ; END_IMPL
+     ; placeholder interrupt handler
+     IMPL_PRIM PLACEHOLDER_INT, 1
+         inc byte [0xb8000] ; so that it's visible something happened
+         iret
+     END_IMPL
 END_SECTION
 
 ; dictionary
 START_SECTION DICT
     DICT_ENTRY INIT, "INIT"
-    ; DICT_ENTRY SET_INT, "SET_INT"
-    ; DICT_ENTRY PLACEHOLDER_INT, "PLACEHOLDER_INT"
+    DICT_ENTRY SET_INT, "SET_INT"
+    DICT_ENTRY PLACEHOLDER_INT, "PLACEHOLDER_INT"
 END_SECTION
 
 ; global-variable & constant table
 START_SECTION GVCT_TABLE
     here dd HERE_START - GVCT_TABLE_START ; cursor in the constant table
     latest dd %$LATEST
-    ; idt_start:
-    ;     times 256 dq 0 ; fake entries, we'll set these at runtime
-    ; idt_end:
-    ; idtr:
-    ;     dw idt_end - idt_start
-    ;     ; note, IDTR requires the linear address of the IDT,
-    ;     ; this is a section offset, so we need to change it
-    ;     ; at runtime before doing LIDT
-    ;     dd idt_start - GVCT_TABLE_START
+    idt_start:
+        times 256 dq 0 ; fake entries, we'll set these at runtime
+    idt_end:
+    idtr:
+        dw idt_end - idt_start
+        ; note, IDTR requires the linear address of the IDT,
+        ; this is a section offset, so we need to change it
+        ; at runtime before doing LIDT
+        dd idt_start - GVCT_TABLE_START
     HERE_START:
 END_SECTION
