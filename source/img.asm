@@ -174,18 +174,39 @@ END_SECTION
 ; word implementation table
 START_SECTION IMPL_TABLE
     IMPL_PRIM INIT, 1
+        ; load GDT (technically we know the bootloader gives us a valid one since we are
+        ; executing in protected mode, but we don't want to rely on the bootloader environment)
+        mov eax, [0x7c20]
+        add dword [eax + (gdtr - GVCT_TABLE_START) + 2], eax
+        lgdt [eax + (gdtr - GVCT_TABLE_START)]
+        sub dword [eax + (gdtr - GVCT_TABLE_START) + 2], eax
 
-        ; set up int3 handler
-        DPUSH 2 ; PLACEHOLDER_INT
-        DPUSH 0 ; interrupt gate
-        DPUSH 3 ; #BP
-        FCALL SET_INT
+        ; reload CS
+        mov ebx, [0x7c10] ; impl table start
+        add [eax + (init_jmpptr - GVCT_TABLE_START)], ebx
+        jmp far [eax + (init_jmpptr - GVCT_TABLE_START)]
+        init_reload_cs:
+        sub [eax + (init_jmpptr - GVCT_TABLE_START)], ebx
+
+        ; and the other segment registers
+        mov ax, 0x10
+        mov ds, ax
+        mov es, ax
+        mov ss, ax
+        mov fs, ax
+        mov gs, ax
 
         ; load IDT
         mov eax, [0x7c20]
         add dword [eax + (idtr - GVCT_TABLE_START) + 2], eax
         lidt [eax + (idtr - GVCT_TABLE_START)]
         sub dword [eax + (idtr - GVCT_TABLE_START) + 2], eax
+
+        ; set up int3 handler
+        DPUSH 2 ; PLACEHOLDER_INT
+        DPUSH 0 ; interrupt gate
+        DPUSH 3 ; #BP
+        FCALL SET_INT
 
         ; our "hello world",
         ; fills the screen with Z characters
@@ -212,6 +233,8 @@ START_SECTION IMPL_TABLE
     ; set that word's current implementation as the interrupt
     ; handler. Note that this does not set that *word* as the handler,
     ; but rather its *current impl*, if it is redefined then tough luck.
+
+    ; todo: make this respect late binding
     IMPL_PRIM SET_INT, 1
         ; set eax to the GVCT base
         mov eax, [0x7c20]
@@ -276,15 +299,45 @@ END_SECTION
 ; global-variable & constant table
 START_SECTION GVCT_TABLE
     here dd HERE_START - GVCT_TABLE_START ; cursor in the constant table
-    latest dd %$LATEST
+    latest dd %$LATEST ; latest defined dictionary entry
+
+    ; struct used by the jmp far in INIT to reload CS
+    init_jmpptr:
+        dd init_reload_cs - IMPL_TABLE_START
+        dw 0x8 ; flat code segment
+
+    align 8, db 0
+    gdt_start:
+        dq 0 ; must be null
+
+        ; code, base = 0, limit = 4GB
+        dw 0xffff ; limit 15:0
+        dw 0 ; base 15:0
+        db 0 ; base 23:16
+        db 0b10011010 ; readable code segment, nonconforming
+        db 0b11001111 ; last 4 bits in the limit, 4KB granularity and 32-bit size
+        db 0 ; base 31:24
+
+        ; data, base = 0, limit = 4GB
+        dw 0xffff
+        dw 0
+        db 0
+        db 0b10010010
+        db 0b11001111
+        db 0
+
+    gdt_end:
+
+    gdtr:
+    dw gdt_end - gdt_start - 1 ; limit
+    dd gdt_start - GVCT_TABLE_START ; base
+
+    align 8, db 0
     idt_start:
         times 256 dq 0 ; fake entries, we'll set these at runtime
     idt_end:
     idtr:
-        dw idt_end - idt_start
-        ; note, IDTR requires the linear address of the IDT,
-        ; this is a section offset, so we need to change it
-        ; at runtime before doing LIDT
+        dw idt_end - idt_start - 1
         dd idt_start - GVCT_TABLE_START
     HERE_START:
 END_SECTION
