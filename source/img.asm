@@ -146,11 +146,16 @@ org 0 ; not actually loaded at 0x00000000, but this gives us simple relative lab
     mov esi, dword [ebp]
 %endmacro
 
+; swap TOS and NOS
+%macro DSWAP 0
+    xchg esi, [ebp - 4]
+%endmacro
+
 ; pop a value from the data stack into a specific register
 %macro DPOPR 1
-    sub ebp, 4
-    mov esi, dword [ebp] ; still have to pop into esi as well to not corrupt the stack
     mov %1, esi
+    sub ebp, 4
+    mov esi, dword [ebp]
 %endmacro
 
 ; ----
@@ -172,6 +177,7 @@ START_SECTION IMPL_TABLE
 
         ; set up int3 handler
         DPUSH 2 ; PLACEHOLDER_INT
+        DPUSH 0 ; interrupt gate
         DPUSH 3 ; #BP
         FCALL SET_INT
 
@@ -202,7 +208,7 @@ START_SECTION IMPL_TABLE
             jmp .hang
     END_IMPL
 
-    ; given an interrupt vector, and word descriptor index
+    ; given an interrupt vector, gate type, and word descriptor index
     ; set that word's current implementation as the interrupt
     ; handler. Note that this does not set that *word* as the handler,
     ; but rather its *current impl*, if it is redefined then tough luck.
@@ -211,8 +217,10 @@ START_SECTION IMPL_TABLE
         mov eax, [0x7c20]
 
         ; ebx gets the offset into the IDT
-        mov ebx, esi
+        DPOPR ebx
         shl ebx, 3
+
+        DSWAP ; swap idx and gate type
 
         ; set ecx to the linear address of the word's impl
         DPOPR ecx
@@ -222,6 +230,16 @@ START_SECTION IMPL_TABLE
         add ecx, edx
         add ecx, edi ; now ecx has the pointer to the word desc with the impl
         mov ecx, [ecx] ; dereference to get the imp ; dereference to get the impll
+
+        DPOPR edx ; pop gate type (0 = interrupt; -1 = trap) into edx
+        test edx, edx
+        jnz .trap
+        .int:
+            mov dl, 0x8e
+            jmp .gate_type_known
+        .trap:
+            mov dl, 0x8f
+        .gate_type_known:
 
         ; offset 0..15
         mov word [eax + (idt_start - GVCT_TABLE_START) + ebx], cx
@@ -237,9 +255,7 @@ START_SECTION IMPL_TABLE
         mov byte [eax + (idt_start - GVCT_TABLE_START) + ebx + 4], 0
 
         ; type (32-bit interrupt gate) as well as DPL (0) and p (1)
-        mov byte [eax + (idt_start - GVCT_TABLE_START) + ebx + 5], 0x8e
-
-        DPOP
+        mov byte [eax + (idt_start - GVCT_TABLE_START) + ebx + 5], dl
         ret
     END_IMPL
 
