@@ -133,6 +133,11 @@ org 0 ; not actually loaded at 0x00000000, but this gives us simple relative lab
     call dword [edi + %%wd_offset]
 %endmacro
 
+%define WDIDX(x) (((x %+ _WD - $$) - (WD_TABLE_START - $$)) / 12)
+
+%define TRUE -1
+%define FALSE 0
+
 ; push a value to the data stack
 %macro DPUSH 1
     mov dword [ebp], esi
@@ -162,11 +167,12 @@ org 0 ; not actually loaded at 0x00000000, but this gives us simple relative lab
 ; CODE
 ; ----
 
-HEADER 0, WD_TABLE, IMPL_TABLE, DICT, GVCT_TABLE
+HEADER 0, WD_TABLE, IMPL_TABLE, DICT, GVCT
 
 ; word descriptor table
 START_SECTION WD_TABLE
     WORD_DESC INIT, 0
+    WORD_DESC INT_INIT, 0
     WORD_DESC SET_INT, 0
     WORD_DESC PLACEHOLDER_INT, 0
 END_SECTION
@@ -177,16 +183,16 @@ START_SECTION IMPL_TABLE
         ; load GDT (technically we know the bootloader gives us a valid one since we are
         ; executing in protected mode, but we don't want to rely on the bootloader environment)
         mov eax, [0x7c20]
-        add dword [eax + (gdtr - GVCT_TABLE_START) + 2], eax
-        lgdt [eax + (gdtr - GVCT_TABLE_START)]
-        sub dword [eax + (gdtr - GVCT_TABLE_START) + 2], eax
+        add dword [eax + (gdtr - GVCT_START) + 2], eax
+        lgdt [eax + (gdtr - GVCT_START)]
+        sub dword [eax + (gdtr - GVCT_START) + 2], eax
 
         ; reload CS
         mov ebx, [0x7c10] ; impl table start
-        add [eax + (init_jmpptr - GVCT_TABLE_START)], ebx
-        jmp far [eax + (init_jmpptr - GVCT_TABLE_START)]
+        add [eax + (init_jmpptr - GVCT_START)], ebx
+        jmp far [eax + (init_jmpptr - GVCT_START)]
         init_reload_cs:
-        sub [eax + (init_jmpptr - GVCT_TABLE_START)], ebx
+        sub [eax + (init_jmpptr - GVCT_START)], ebx
 
         ; and the other segment registers
         mov ax, 0x10
@@ -196,14 +202,11 @@ START_SECTION IMPL_TABLE
         mov fs, ax
         mov gs, ax
 
-        ; load IDT
-        mov eax, [0x7c20]
-        add dword [eax + (idtr - GVCT_TABLE_START) + 2], eax
-        lidt [eax + (idtr - GVCT_TABLE_START)]
-        sub dword [eax + (idtr - GVCT_TABLE_START) + 2], eax
+        ; initialize and load interrupt descriptor table
+        FCALL INT_INIT
 
         ; set up int3 handler
-        DPUSH 2 ; PLACEHOLDER_INT
+        DPUSH WDIDX(PLACEHOLDER_INT)
         DPUSH 0 ; interrupt gate
         DPUSH 3 ; #BP
         FCALL SET_INT
@@ -229,32 +232,70 @@ START_SECTION IMPL_TABLE
             jmp .hang
     END_IMPL
 
-    ; given an interrupt vector, gate type, and word descriptor index
-    ; set that word's current implementation as the interrupt
-    ; handler. Note that this does not set that *word* as the handler,
-    ; but rather its *current impl*, if it is redefined then tough luck.
+    ; load the IDT, and make each entry in it point to the corresponding IDeT entry in our flat code segment
+    IMPL_PRIM INT_INIT, 1
+        ; load IDT
+        mov eax, [0x7c20]
+        add dword [eax + (idtr - GVCT_START) + 2], eax
+        lidt [eax + (idtr - GVCT_START)]
+        sub dword [eax + (idtr - GVCT_START) + 2], eax
 
-    ; todo: make this respect late binding
+        ; initialize IDT to point to IDeT entries
+        xor edx, edx
+        mov ecx, 256
+        .loop:
+            mov ebx, eax
+            add ebx, idet_start - GVCT_START
+            add ebx, edx
+
+            ; offset 0..15
+            mov word [eax + (idt_start - GVCT_START) + edx], bx
+            shr ebx, 16
+            ; offset 16..31
+            mov word [eax + (idt_start - GVCT_START) + edx + 6], bx
+
+            ; segment selector
+            mov word [eax + (idt_start - GVCT_START) + edx + 2], 0x08
+
+            ; zero field
+            mov byte [eax + (idt_start - GVCT_START) + edx + 4], 0
+
+            ; leave gate type, DPL, and P unset
+
+            add edx, 8
+            dec ecx
+            jnz .loop
+
+        ret
+    END_IMPL
+
+    ; given an interrupt vector, gate type, and word descriptor index
+    ; set that word idx as the interrupt handler, and set the type of the
+    ; IDT entry at <interrupt_vector> to <gate_type> (0 = interrupt, -1 = trap)
+
+    ; Note, while interrupt handlers set by SET_INT do see changes to a word's impl,
+    ; they do not check the generation counter, so similarly to compiled word calls,
+    ; if you DELETE a word registered as an interrupt handler, and then DEFINE a new
+    ; word that happens to use the same descriptor slot, then rather than erroring,
+    ; the word will be dispatched to with most probably unintended and bad consequences
     IMPL_PRIM SET_INT, 1
         ; set eax to the GVCT base
         mov eax, [0x7c20]
 
-        ; ebx gets the offset into the IDT
+        ; ebx gets the idx into the IDT and IDeT
         DPOPR ebx
-        shl ebx, 3
 
         DSWAP ; swap idx and gate type
 
-        ; set ecx to the linear address of the word's impl
+        ; set ecx to the offset of the word in the word descriptor table
         DPOPR ecx
         mov edx, ecx
         shl ecx, 3
         shl edx, 2
         add ecx, edx
-        add ecx, edi ; now ecx has the pointer to the word desc with the impl
-        mov ecx, [ecx] ; dereference to get the imp ; dereference to get the impll
 
-        DPOPR edx ; pop gate type (0 = interrupt; -1 = trap) into edx
+        ; get gate type
+        DPOPR edx
         test edx, edx
         jnz .trap
         .int:
@@ -264,21 +305,11 @@ START_SECTION IMPL_TABLE
             mov dl, 0x8f
         .gate_type_known:
 
-        ; offset 0..15
-        mov word [eax + (idt_start - GVCT_TABLE_START) + ebx], cx
-        shr ecx, 16
-        ; offset 16..31
-        mov word [eax + (idt_start - GVCT_TABLE_START) + ebx + 6], cx
+        ; set the gate type and DPL/P of the IDT entry
+        mov byte [eax + (idt_start - GVCT_START) + ebx * 8 + 5], dl
+        ; set the disp32 field of the IDeT entry
+        mov dword [eax + (idet_start - GVCT_START) + ebx * 8 + 2], ecx
 
-        ; segment selector, the bootloader gives us flat segmentation
-        ; with 0x08 being the code segment and 0x10 being the data segment
-        mov word [eax + (idt_start - GVCT_TABLE_START) + ebx + 2], 0x08
-
-        ; zero field
-        mov byte [eax + (idt_start - GVCT_TABLE_START) + ebx + 4], 0
-
-        ; type (32-bit interrupt gate) as well as DPL (0) and p (1)
-        mov byte [eax + (idt_start - GVCT_TABLE_START) + ebx + 5], dl
         ret
     END_IMPL
 
@@ -292,13 +323,14 @@ END_SECTION
 ; dictionary
 START_SECTION DICT
     DICT_ENTRY INIT, "INIT"
+    DICT_ENTRY INT_INIT, "INT_INIT"
     DICT_ENTRY SET_INT, "SET_INT"
     DICT_ENTRY PLACEHOLDER_INT, "PLACEHOLDER_INT"
 END_SECTION
 
 ; global-variable & constant table
-START_SECTION GVCT_TABLE
-    here dd HERE_START - GVCT_TABLE_START ; cursor in the constant table
+START_SECTION GVCT
+    here dd HERE_START - GVCT_START ; cursor in the constant table
     latest dd %$LATEST ; latest defined dictionary entry
 
     ; struct used by the jmp far in INIT to reload CS
@@ -330,7 +362,7 @@ START_SECTION GVCT_TABLE
 
     gdtr:
     dw gdt_end - gdt_start - 1 ; limit
-    dd gdt_start - GVCT_TABLE_START ; base
+    dd gdt_start - GVCT_START ; base
 
     align 8, db 0
     idt_start:
@@ -338,6 +370,18 @@ START_SECTION GVCT_TABLE
     idt_end:
     idtr:
         dw idt_end - idt_start - 1
-        dd idt_start - GVCT_TABLE_START
+        dd idt_start - GVCT_START
+
+    ; interrupt descriptor extension table, this lets us make ISRs respect late binding
+    align 8, db 0
+    idet_start:
+    %rep 256
+        ; jmp [edi + disp32]
+        db 0xff, 0xa7
+        dd 0 ; disp32, set this to WD_IDX * 12 whenever you want to set a new interrupt handler
+        dw 0 ; padding so that each entry becomes 8 bytes
+    %endrep
+    idet_end:
+
     HERE_START:
 END_SECTION
