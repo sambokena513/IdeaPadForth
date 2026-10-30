@@ -172,6 +172,7 @@ HEADER 0, WD_TABLE, IMPL_TABLE, DICT, GVCT
 ; word descriptor table
 START_SECTION WD_TABLE
     WORD_DESC INIT, 0
+    WORD_DESC CLS, 0
     WORD_DESC INT_INIT, 0
     WORD_DESC SET_INT, 0
     WORD_DESC PLACEHOLDER_INT, 0
@@ -225,6 +226,8 @@ START_SECTION IMPL_TABLE
             jmp .loop
         .end:
 
+        FCALL CLS
+
         int3 ; test our interrupt handler, should triple-fault if we f'ed up
 
         .hang:
@@ -232,7 +235,55 @@ START_SECTION IMPL_TABLE
             jmp .hang
     END_IMPL
 
-    ; load the IDT, and make each entry in it point to the corresponding IDeT entry in our flat code segment
+    ; clear the screen
+    IMPL_PRIM CLS, 1
+        mov eax, [0x7c20]
+        mov word [eax + (console_cursor - GVCT_START)], 0 ; reset cursor
+
+        ; if the cursor is enabled, move it to the start of the screen
+        cmp byte [eax + (console_display_cursor - GVCT_START)], -1
+        jne .after
+            push eax
+
+            ; cursor location low
+            mov dx, 0x3d4
+            mov al, 0x0f
+            out dx, al
+
+            mov dx, 0x3d5
+            mov al, 0
+            out dx, al
+
+            ; cursor location high
+            mov dx, 0x3d4
+            mov al, 0x0e
+            out dx, al
+
+            mov dx, 0x3d5
+            mov al, 0
+            out dx, al
+
+            pop eax
+        .after:
+
+        ; copy the console's default attribute byte, and ascii whitespace into all 2000 tiles
+        mov bl, byte [eax + (console_attr - GVCT_START)]
+        mov edx, 0xb8000
+        xor ecx, ecx
+        .loop:
+            cmp ecx, 4000
+            je .end
+
+            mov byte [edx + ecx], 32
+            mov byte [edx + ecx + 1], bl
+
+            add ecx, 2
+            jmp .loop
+        .end:
+        ret
+    END_IMPL
+
+    ; load the IDT, and make each entry in it points to the corresponding IDeT entry in our flat code segment
     IMPL_PRIM INT_INIT, 1
         ; load IDT
         mov eax, [0x7c20]
@@ -323,6 +374,7 @@ END_SECTION
 ; dictionary
 START_SECTION DICT
     DICT_ENTRY INIT, "INIT"
+    DICT_ENTRY CLS, "CLS"
     DICT_ENTRY INT_INIT, "INT_INIT"
     DICT_ENTRY SET_INT, "SET_INT"
     DICT_ENTRY PLACEHOLDER_INT, "PLACEHOLDER_INT"
@@ -332,6 +384,11 @@ END_SECTION
 START_SECTION GVCT
     here dd HERE_START - GVCT_START ; cursor in the constant table
     latest dd %$LATEST ; latest defined dictionary entry
+
+    ; terminal variables
+    console_cursor dw 0 ; current position in VGA text buffer
+    console_attr db 0x07 ; attribute byte to use for characters
+    console_display_cursor db -1 ; whether the text mode cursor is enabled
 
     ; struct used by the jmp far in INIT to reload CS
     init_jmpptr:
