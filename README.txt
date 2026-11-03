@@ -260,7 +260,7 @@ On-Disk Image Format - Revision 1:
             // 512-byte sector containing it and the IHeaderDesc
             char[8] magic = "FIF IMG ";
             uint32 revision;
-            uint32 crc32sum;
+            uint32 crc32sum; // more specifically CRC-32/ISO-HDLC
         }
 
     Persistent Data Structure format:
