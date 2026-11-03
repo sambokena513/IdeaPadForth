@@ -1187,8 +1187,36 @@ protected_mode:
     mov ecx, 0x7c00 ; overwrite MBR code
     call read_blocks
 
+    lstr eax, `Verifying image header.\r\n`
+    call bios_puts32
+
+    lstr eax, `Checking magic number.\r\n`
+    call bios_puts32
+
+    mov eax, [0x7c00]
+    cmp eax, 0x20464946 ; "FIF "
+    jne fail
+    mov eax, [0x7c04]
+    cmp eax, 0x20474d49 ; "IMG "
+    jne fail
+
+    lstr eax, `Checking revision number, this bootloader only accepts revision 1 images.\r\n`
+    call bios_puts32
+
+    mov eax, [0x7c08]
+    cmp eax, 1
+    jne fail
+
+    ; todo: verify the image header is sane:
+        ; - magic number must match expected "FIF IMG " (DONE)
+        ; - version must match expected value 1 (DONE)
+        ; - CRC32 checksum must match the expected one (TODO)
+
 parse_image:
     ; parse image header and read sections
+
+    lstr eax, `Parsing and loading image.\r\n`
+    call bios_puts32
 
     ; mark memory map location in runtime header
     movzx eax, byte [e820_arr_len]
@@ -1329,6 +1357,11 @@ final:
 
 fallthrough:
     lstr eax, `Reached end of bootloader code, if you are seeing this, it means the image returned unexpectedly.\r\n`
+    call bios_puts32
+    HANG32
+
+fail:
+    lstr eax, `Image is unbootable, hanging.\r\n`
     call bios_puts32
     HANG32
 

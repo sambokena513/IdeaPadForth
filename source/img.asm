@@ -40,7 +40,15 @@ org 0 ; not actually loaded at 0x00000000, but this gives us simple relative lab
 %macro HEADER 1-*
     ALIGN_LBLK
 
-    times 256 db 0 ; runtime, nothing on disk
+    ; IHeaderDesc
+    dq 0x20474d4920464946 ; "FIF IMG "
+    dd 1 ; revision 1
+    dd 0 ; crc32sum, this gets added by a postprocessing script
+         ; since NASM's preprocessor can't really do that
+
+    times 240 db 0 ; IHeaderDesc is 16 bytes
+
+    ; IHeader
 
     dd %1 ; entry point word descriptor index
     dd %0 - 1 ; number of section descriptors

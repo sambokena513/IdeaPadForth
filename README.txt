@@ -219,7 +219,7 @@ Language design:
         is basically a spiritual successor to SmolForth; a Forth even smaller in the
         sense that it needs no OS to boot, it is the OS.
 
-On-Disk Image Format:
+On-Disk Image Format - Revision 1:
 
     Persistent data structures:
         The image currently has 4 persistent data structures, though this list
@@ -249,6 +249,20 @@ On-Disk Image Format:
     of some sort, you can make each data structure be a file, and put the
     filesystem's root metadata at LBA 65 (right after the image header).
 
+    To detect corrupted and/or unbootable images, the first half of the image
+    header sector contains a small descriptor of the image header in this
+    format which bootloaders may choose to ignore, but can be used to verify the
+    image is correct:
+
+        typedef struct IHeaderDesc {
+            // note that the crc32sum here is calculated
+            // from just the 256-byte image header, not the whole
+            // 512-byte sector containing it and the IHeaderDesc
+            char[8] magic = "FIF IMG ";
+            uint32 revision;
+            uint32 crc32sum;
+        }
+
     Persistent Data Structure format:
 
         // note, sectors here and lba assume 512-byte sectors,
@@ -260,11 +274,12 @@ On-Disk Image Format:
             uint32 sector_count;
         } PData;
 
-    Image Header Descriptor format:
+    Image Header format:
 
-        typedef struct IHeaderDesc {
+        typedef struct IHeader {
             uint32 image_entry; // the word descriptor the bootloader should call
-            uint32 pdata_entry_count; // number of PData structs after this header
+            uint32 pdata_entry_count; // number of PData structs in this header
+            PData[] data;
         } IHeaderDesc;
 
     Pointers between the dictionary, word descriptor table, and word
@@ -279,7 +294,6 @@ On-Disk Image Format:
     structure can be expected to be in edi when the image is entered.
 
     Index 1 - Word implementation table.
-
 
 Image Loading:
 
