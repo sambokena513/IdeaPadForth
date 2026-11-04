@@ -228,7 +228,7 @@ On-Disk Image Format - Revision 1:
             - Word descriptor table: Word entries that each correspond to a
               unique word identity.
             - Word implementation table: Implementation entries that each
-              contain an 8-byte header with a reference count and size, and
+              contain an header with a reference count and size, and
               then machine code for the word.
             - Global variable & constant table: ALLOTed memory. Used by words
               like VARIABLE to allocate persistent memory, without this we'd

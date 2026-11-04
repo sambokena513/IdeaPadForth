@@ -2,10 +2,10 @@
 ;  imgloader.asm
 ;
 ;  Copyright (C) 2026 Samuel Peciar
-;  
+;
 ;  This program is free software: you can redistribute it and/or modify
 ;  it under the terms of the GNU General Public License as published by
-;  the Free Software Foundation, either version 3 of the License, or 
+;  the Free Software Foundation, either version 3 of the License, or
 ;  any later version.
 
 
@@ -602,7 +602,7 @@ read_blocks: ; args: lba, count, buf
         add edx, ebx ; move disk cursor
         sub esi, ebx ; decrement the remaining count
         shl ebx, 9 ; ebx now contains the amount of bytes to copy into the output buffer
-        
+
         ; copy the blocks we read into the final buffer
         lea eax, [BBUFADDR]
         .memcpy:
@@ -644,7 +644,7 @@ reserve_bootloader:
     shl ebx, 2
     add eax, ebx
     add eax, e820_arr
-    
+
     mov dword [eax + e820_base_offset], 0
     mov dword [eax + e820_base_offset + 4], 0
     mov dword [eax + e820_length_offset], 0x20000
@@ -670,7 +670,7 @@ sort:
     ; the limit the limit must be 1 smaller to prevent a bounds error on i + 1
     sub ebx, ecx
     xor edi, edi ; edi holds the status of if the array was changed or not
-    
+
     ; eax - cursor, ebx - limit, ecx - stride, edx - compare
 
     .loop:
@@ -979,7 +979,7 @@ sanitize_smap:
     mov byte [e820_arr_len], 0 ; since we'll be emitting new entries
 
     ; loop over boundary events and emit entries,
-    ; the core idea is that the space between two boundary events represents an interval, 
+    ; the core idea is that the space between two boundary events represents an interval,
     ; and the active types represent how many and what kinds of intervals are currently unfinished
     .process_event:
         cmp byte [e820_arr_len], 255 ; if we've filled the entry array then it would be useless to continue
@@ -1083,7 +1083,7 @@ sanitize_smap:
             add ecx, 20
             inc byte [e820_arr_len]
         .after_addr:
-        
+
         ; if event.type is zero, add event.memtype to active array
         mov esi, [eax + 12]
         cmp dword [eax + 8], 0
@@ -1193,6 +1193,7 @@ protected_mode:
     lstr eax, `Checking magic number.\r\n`
     call bios_puts32
 
+    ; check header magic (so we don't consider things not in our image format to be bootable)
     mov eax, [0x7c00]
     cmp eax, 0x20464946 ; "FIF "
     jne fail
@@ -1200,6 +1201,7 @@ protected_mode:
     cmp eax, 0x20474d49 ; "IMG "
     jne fail
 
+    ; check revision number (so we don't consider future formats bootable)
     lstr eax, `Checking revision number, this bootloader only accepts revision 1 images.\r\n`
     call bios_puts32
 
@@ -1207,10 +1209,69 @@ protected_mode:
     cmp eax, 1
     jne fail
 
-    ; todo: verify the image header is sane:
-        ; - magic number must match expected "FIF IMG " (DONE)
-        ; - version must match expected value 1 (DONE)
-        ; - CRC32 checksum must match the expected one (TODO)
+%define CRC_POLY 0xedb88320
+crc_table:
+    ; compute CRC lookup table, store it into BBUF
+
+    mov dword [BBUFADDR], 0
+    mov eax, 1 ; crc
+    mov ebx, 128 ; i
+
+    .outer:
+        test eax, 1
+        jnz .true
+        .false:
+            shr eax, 1
+            jmp .after
+        .true:
+            shr eax, 1
+            xor eax, CRC_POLY
+        .after:
+
+        xor ecx, ecx ; j
+        mov edx, ebx
+        shl edx, 1 ; i*2
+        lea edi, [ecx + ebx] ; i + j
+        .inner:
+            mov esi, eax
+            xor esi, [BBUFADDR + ecx*4]
+            mov [BBUFADDR + edi*4], esi
+
+            add edi, edx
+            add ecx, edx
+            cmp ecx, 256
+            jb .inner
+
+        shr ebx, 1
+        jnz .outer
+
+crc_check:
+    lstr eax, `Checking checksum.\r\n`
+    call bios_puts32
+
+    ; calculate image header checksum
+    mov eax, 0xffffffff ; crc
+    xor ebx, ebx
+
+    .loop:
+        cmp ebx, 256
+        je .end_loop
+
+        xor al, byte [0x7c00 + 256 + ebx]
+        mov ecx, eax
+        and ecx, 0xff
+        shr eax, 8
+        xor eax, [BBUFADDR + ecx*4]
+
+        inc ebx
+        jmp .loop
+    .end_loop:
+
+    xor eax, 0xffffffff
+
+    ; verify against header checksum
+    cmp eax, dword [0x7c00 + 12]
+    jne fail
 
 parse_image:
     ; parse image header and read sections
