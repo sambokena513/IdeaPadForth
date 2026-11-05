@@ -112,10 +112,10 @@ Language design:
 
                 LIT:
                     mov [ebp], imm32
-                    add ebp, 8
+                    add ebp, 4
 
                 0BRANCH:
-                    sub ebp, 8
+                    sub ebp, 4
                     cmp [ebp], 0
                     je rel32
 

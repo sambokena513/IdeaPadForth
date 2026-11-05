@@ -186,6 +186,7 @@ START_SECTION WD_TABLE
     WORD_DESC SET_INT, 0
     WORD_DESC PLACEHOLDER_INT, 0
     WORD_DESC CONSOLE_INIT, 0
+    WORD_DESC PUTC, 0
 END_SECTION
 
 ; word implementation table
@@ -223,10 +224,34 @@ START_SECTION IMPL_TABLE
         FCALL SET_INT
 
         ; initialize terminal
-        DPUSH 0 ; start at the start of the console
+        DPUSH 990 ; start just before the middle of the console
         DPUSH 0x17 ; cursor attr
         DPUSH 0x07 ; attribute byte
         FCALL CONSOLE_INIT
+
+        ; print greeting message
+        mov eax, [0x7c20]
+        mov ebx, [eax + (greeting_len - GVCT_START)]
+        lea eax, [eax + (greeting - GVCT_START)]
+        DPUSH eax
+        DPUSH ebx
+        .print:
+            cmp esi, 0
+            je .end_print
+
+            ; push char
+            DSWAP
+            movzx eax, byte [esi]
+            DSWAP
+            DPUSH eax
+
+            FCALL PUTC
+
+            ; move cursors
+            inc dword [ebp - 4]
+            dec esi
+            jmp .print
+        .end_print:
 
         .hang:
             int3 ; will triple-fault if we f***ed up
@@ -377,6 +402,54 @@ START_SECTION IMPL_TABLE
         ret
     END_IMPL
 
+    ; print a character to the console, TODO implement scrolling or wrapping for when it goes past the end
+    IMPL_PRIM PUTC, 1
+        ; load values, al = char to print, bl = attribute byte for char, dl = attribute byte for cursor, cx = cursor
+        mov eax, [0x7c20]
+        mov bl, byte [eax + (console_attr - GVCT_START)]
+        mov dl, byte [eax + (console_cursorattr - GVCT_START)]
+        movzx ecx, word [eax + (console_cursor - GVCT_START)]
+
+        mov byte [0xb8001 + ecx * 2], bl ; remove cursor from current one
+
+        DPOPR eax
+        cmp al, 10
+        je .ln
+        cmp al, 13
+        je .cr
+            ; print char
+            mov byte [0xb8000 + ecx * 2], al ; char
+            inc cx
+            mov byte [0xb8001 + ecx * 2], dl ; new cursor
+            mov eax, [0x7c20]
+            mov word [eax + (console_cursor - GVCT_START)], cx ; save cursor
+            ret
+        .ln:
+            ; new line
+            add cx, 80 ; length of one line
+            mov byte [0xb8001 + ecx * 2], dl
+            mov eax, [0x7c20]
+            mov word [eax + (console_cursor - GVCT_START)], cx ; save cursor
+            ret
+        .cr:
+            ; carriage return
+            mov bl, dl
+            DPUSH ecx
+
+            ; dx = cx % 80
+            xor dx, dx
+            mov ax, cx
+            mov cx, 80
+            div cx
+
+            DPOPR ecx
+            sub cx, dx
+            mov byte [0xb8001 + ecx * 2], bl
+            mov eax, [0x7c20]
+            mov word [eax + (console_cursor - GVCT_START)], cx ; save cursor
+            ret
+    END_IMPL
+
     ; placeholder interrupt handler
     IMPL_PRIM PLACEHOLDER_INT, 1
         inc byte [0xb8000] ; so that it's visible something happened
@@ -392,6 +465,7 @@ START_SECTION DICT
     DICT_ENTRY SET_INT, "SET_INT"
     DICT_ENTRY PLACEHOLDER_INT, "PLACEHOLDER_INT"
     DICT_ENTRY CONSOLE_INIT, "CONSOLE_INIT"
+    DICT_ENTRY PUTC, "PUTC"
 END_SECTION
 
 ; global-variable & constant table
@@ -403,6 +477,9 @@ START_SECTION GVCT
     console_cursor dw 0 ; current position in VGA text buffer
     console_attr db 0x07 ; attribute byte to use for characters
     console_cursorattr db 0x17 ; attribute byte to use for the cell the cursor is on
+
+    greeting db "Hello world!", 13, 10
+    greeting_len dd $ - greeting
 
     ; struct used by the jmp far in INIT to reload CS
     init_jmpptr:
