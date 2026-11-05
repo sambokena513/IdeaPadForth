@@ -181,11 +181,12 @@ HEADER 0, WD_TABLE, IMPL_TABLE, DICT, GVCT
 ; word descriptor table
 START_SECTION WD_TABLE
     WORD_DESC INIT, 0
-    WORD_DESC CLS, 0
     WORD_DESC INT_INIT, 0
     WORD_DESC SET_INT, 0
     WORD_DESC PLACEHOLDER_INT, 0
     WORD_DESC CONSOLE_INIT, 0
+    WORD_DESC CLS, 0
+    WORD_DESC SCROLL, 0
     WORD_DESC PUTC, 0
 END_SECTION
 
@@ -258,33 +259,6 @@ START_SECTION IMPL_TABLE
             jmp .hang
     END_IMPL
 
-    ; clear the screen
-    IMPL_PRIM CLS, 1
-        mov eax, [0x7c20]
-        mov word [eax + (console_cursor - GVCT_START)], 0 ; reset cursor
-
-        ; copy the console's default attribute byte, and ascii whitespace into all 2000 tiles
-        mov bl, byte [eax + (console_attr - GVCT_START)]
-        mov edx, 0xb8000
-        xor ecx, ecx
-        .loop:
-            cmp ecx, 4000
-            je .end
-
-            mov byte [edx + ecx], 32
-            mov byte [edx + ecx + 1], bl
-
-            add ecx, 2
-            jmp .loop
-        .end:
-
-        ; set the displayed cursor
-        mov bl, byte [eax + (console_cursorattr - GVCT_START)]
-        mov byte [0xb8001], bl
-
-        ret
-    END_IMPL
-
     ; load the IDT, and make each entry in it points to the corresponding IDeT entry in our flat code segment
     IMPL_PRIM INT_INIT, 1
         ; load IDT
@@ -318,7 +292,6 @@ START_SECTION IMPL_TABLE
             add edx, 8
             dec ecx
             jnz .loop
-
         ret
     END_IMPL
 
@@ -366,6 +339,12 @@ START_SECTION IMPL_TABLE
         ret
     END_IMPL
 
+    ; placeholder interrupt handler
+    IMPL_PRIM PLACEHOLDER_INT, 1
+        inc byte [0xb8000] ; so that it's visible something happened
+        iret
+    END_IMPL
+
     ; initialize or reinitialize the console, args are the attribute byte to use,
     ; attribute byte to use for the cursor, and initial software cursor position
     IMPL_PRIM CONSOLE_INIT, 1
@@ -402,8 +381,93 @@ START_SECTION IMPL_TABLE
         ret
     END_IMPL
 
-    ; print a character to the console, TODO implement scrolling or wrapping for when it goes past the end
+    ; clear the screen
+    IMPL_PRIM CLS, 1
+        mov eax, [0x7c20]
+        mov word [eax + (console_cursor - GVCT_START)], 0 ; reset cursor
+
+        ; copy the console's default attribute byte, and ascii whitespace into all 2000 tiles
+        mov bl, byte [eax + (console_attr - GVCT_START)]
+        mov edx, 0xb8000
+        xor ecx, ecx
+        .loop:
+            cmp ecx, 4000
+            je .end
+
+            mov byte [edx + ecx], 32
+            mov byte [edx + ecx + 1], bl
+
+            add ecx, 2
+            jmp .loop
+        .end:
+
+        ; set the displayed cursor
+        mov bl, byte [eax + (console_cursorattr - GVCT_START)]
+        mov byte [0xb8001], bl
+
+        ret
+    END_IMPL
+
+    ; scroll the terminal back one line
+    IMPL_PRIM SCROLL, 1
+        ; load gvct
+        mov eax, [0x7c20]
+
+        ; set cursor to max(cursor - 80, 0), and stop displaying it on the previous location
+        movzx edx, word [eax + (console_cursor - GVCT_START)]
+        mov bl, byte [eax + (console_attr - GVCT_START)]
+        mov byte [0xb8001 + edx * 2], bl
+
+        cmp dx, 80
+        jnb .move_cursor
+            xor edx, edx
+            jmp .normal
+        .move_cursor:
+            sub edx, 80
+        .normal:
+        mov word [eax + (console_cursor - GVCT_START)], dx
+
+        ; loop over the first 24 of 25 lines and copy backwards
+        xor ebx, ebx
+        .copy:
+            cmp ebx, 1920
+            je .endcopy
+
+            mov cx, word [0xb8000 + 80*2 + ebx*2]
+            mov word [0xb8000 + ebx*2], cx
+
+            inc ebx
+            jmp .copy
+        .endcopy:
+
+        xor ebx, ebx
+        .fill:
+            cmp ebx, 80
+            je .endfill
+
+            mov ch, byte [eax + (console_attr - GVCT_START)]
+            mov cl, 32
+            mov [0xb8000 + 1920*2 + ebx*2], cx
+
+            inc ebx
+            jmp .fill
+        .endfill:
+
+        ; display cursor at new position
+        movzx edx, word [eax + (console_cursor - GVCT_START)]
+        mov bl, byte [eax + (console_cursorattr - GVCT_START)]
+        mov byte [0xb8001 + edx * 2], bl
+        ret
+    END_IMPL
+
     IMPL_PRIM PUTC, 1
+        ; first scroll if the cursor'd overflow
+        mov eax, [0x7c20]
+        cmp word [eax + (console_cursor - GVCT_START)], 2000
+        jb .no_scroll
+            FCALL SCROLL
+        .no_scroll:
+
         ; load values, al = char to print, bl = attribute byte for char, dl = attribute byte for cursor, cx = cursor
         mov eax, [0x7c20]
         mov bl, byte [eax + (console_attr - GVCT_START)]
@@ -449,22 +513,17 @@ START_SECTION IMPL_TABLE
             mov word [eax + (console_cursor - GVCT_START)], cx ; save cursor
             ret
     END_IMPL
-
-    ; placeholder interrupt handler
-    IMPL_PRIM PLACEHOLDER_INT, 1
-        inc byte [0xb8000] ; so that it's visible something happened
-        iret
-    END_IMPL
 END_SECTION
 
 ; dictionary
 START_SECTION DICT
     DICT_ENTRY INIT, "INIT"
-    DICT_ENTRY CLS, "CLS"
     DICT_ENTRY INT_INIT, "INT_INIT"
     DICT_ENTRY SET_INT, "SET_INT"
     DICT_ENTRY PLACEHOLDER_INT, "PLACEHOLDER_INT"
     DICT_ENTRY CONSOLE_INIT, "CONSOLE_INIT"
+    DICT_ENTRY CLS, "CLS"
+    DICT_ENTRY SCROLL, "SCROLL"
     DICT_ENTRY PUTC, "PUTC"
 END_SECTION
 
