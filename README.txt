@@ -315,7 +315,7 @@ Image Loading:
 
             typedef struct PDataLoaded {
                 *char start;
-                uint32 size;
+                *char end;
             }
 
     With this processor state:
