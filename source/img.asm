@@ -141,6 +141,7 @@ org 0 ; not actually loaded at 0x00000000, but this gives us simple relative lab
     call dword [edi + %%wd_offset]
 %endmacro
 
+; get the word descriptor index of a label
 %define WDIDX(x) (((x %+ _WD - $$) - (WD_TABLE_START - $$)) / 12)
 
 %define TRUE -1
@@ -184,6 +185,7 @@ START_SECTION WD_TABLE
     WORD_DESC INT_INIT, 0
     WORD_DESC SET_INT, 0
     WORD_DESC PLACEHOLDER_INT, 0
+    WORD_DESC CONSOLE_INIT, 0
 END_SECTION
 
 ; word implementation table
@@ -220,26 +222,14 @@ START_SECTION IMPL_TABLE
         DPUSH 3 ; #BP
         FCALL SET_INT
 
-        ; our "hello world",
-        ; fills the screen with Z characters
-
-        xor eax, eax
-        .loop:
-            cmp eax, 2000 * 2
-            je .end
-
-            mov byte [0xb8000 + eax], 'Z'
-
-            add eax, 2
-            jmp .loop
-        .end:
-
-        FCALL CLS
-
-        int3 ; test our interrupt handler, should triple-fault if we f'ed up
+        ; initialize terminal
+        DPUSH 0 ; start at the start of the console
+        DPUSH 0x17 ; cursor attr
+        DPUSH 0x07 ; attribute byte
+        FCALL CONSOLE_INIT
 
         .hang:
-            hlt
+            int3 ; will triple-fault if we f***ed up
             jmp .hang
     END_IMPL
 
@@ -247,32 +237,6 @@ START_SECTION IMPL_TABLE
     IMPL_PRIM CLS, 1
         mov eax, [0x7c20]
         mov word [eax + (console_cursor - GVCT_START)], 0 ; reset cursor
-
-        ; if the cursor is enabled, move it to the start of the screen
-        cmp byte [eax + (console_display_cursor - GVCT_START)], -1
-        jne .after
-            push eax
-
-            ; cursor location low
-            mov dx, 0x3d4
-            mov al, 0x0f
-            out dx, al
-
-            mov dx, 0x3d5
-            mov al, 0
-            out dx, al
-
-            ; cursor location high
-            mov dx, 0x3d4
-            mov al, 0x0e
-            out dx, al
-
-            mov dx, 0x3d5
-            mov al, 0
-            out dx, al
-
-            pop eax
-        .after:
 
         ; copy the console's default attribute byte, and ascii whitespace into all 2000 tiles
         mov bl, byte [eax + (console_attr - GVCT_START)]
@@ -288,6 +252,11 @@ START_SECTION IMPL_TABLE
             add ecx, 2
             jmp .loop
         .end:
+
+        ; set the displayed cursor
+        mov bl, byte [eax + (console_cursorattr - GVCT_START)]
+        mov byte [0xb8001], bl
+
         ret
     END_IMPL
 
@@ -372,11 +341,47 @@ START_SECTION IMPL_TABLE
         ret
     END_IMPL
 
-     ; placeholder interrupt handler
-     IMPL_PRIM PLACEHOLDER_INT, 1
-         inc byte [0xb8000] ; so that it's visible something happened
-         iret
-     END_IMPL
+    ; initialize or reinitialize the console, args are the attribute byte to use,
+    ; attribute byte to use for the cursor, and initial software cursor position
+    IMPL_PRIM CONSOLE_INIT, 1
+        ; disable hardware cursor since we don't use it
+        mov dx, 0x3d4
+        mov al, 0xa
+        out dx, al
+
+        inc dx
+        mov al, 0x20
+        out dx, al
+
+        mov eax, [0x7c20]
+
+        ; set attribute byte
+        DPOPR ebx
+        mov byte [eax + (console_attr - GVCT_START)], bl
+
+        ; set cursor attr byte to normal one temporarily so CLS effectively doesn't use it
+        mov byte [eax + (console_cursorattr - GVCT_START)], bl
+
+        ; clear the screen with the new attribute byte
+        FCALL CLS
+
+        mov eax, [0x7c20] ; reload GVCT
+
+        ; set cursor pos and display the cursor
+        DPOPR ecx
+        mov byte [eax + (console_cursorattr - GVCT_START)], cl
+        DPOPR ebx
+        mov word [eax + (console_cursor - GVCT_START)], bx
+        mov byte [0xb8001 + ebx * 2], cl ; display cursor
+
+        ret
+    END_IMPL
+
+    ; placeholder interrupt handler
+    IMPL_PRIM PLACEHOLDER_INT, 1
+        inc byte [0xb8000] ; so that it's visible something happened
+        iret
+    END_IMPL
 END_SECTION
 
 ; dictionary
@@ -386,6 +391,7 @@ START_SECTION DICT
     DICT_ENTRY INT_INIT, "INT_INIT"
     DICT_ENTRY SET_INT, "SET_INT"
     DICT_ENTRY PLACEHOLDER_INT, "PLACEHOLDER_INT"
+    DICT_ENTRY CONSOLE_INIT, "CONSOLE_INIT"
 END_SECTION
 
 ; global-variable & constant table
@@ -396,7 +402,7 @@ START_SECTION GVCT
     ; terminal variables
     console_cursor dw 0 ; current position in VGA text buffer
     console_attr db 0x07 ; attribute byte to use for characters
-    console_display_cursor db -1 ; whether the text mode cursor is enabled
+    console_cursorattr db 0x17 ; attribute byte to use for the cell the cursor is on
 
     ; struct used by the jmp far in INIT to reload CS
     init_jmpptr:
