@@ -178,18 +178,6 @@ org 0 ; not actually loaded at 0x00000000, but this gives us simple relative lab
 
 HEADER 0, WD_TABLE, IMPL_TABLE, DICT, GVCT
 
-; word descriptor table
-START_SECTION WD_TABLE
-    WORD_DESC INIT, 0
-    WORD_DESC INT_INIT, 0
-    WORD_DESC SET_INT, 0
-    WORD_DESC PLACEHOLDER_INT, 0
-    WORD_DESC CONSOLE_INIT, 0
-    WORD_DESC CLS, 0
-    WORD_DESC SCROLL, 0
-    WORD_DESC PUTC, 0
-END_SECTION
-
 ; word implementation table
 START_SECTION IMPL_TABLE
     IMPL_PRIM INIT, 1
@@ -236,26 +224,12 @@ START_SECTION IMPL_TABLE
         lea eax, [eax + (greeting - GVCT_START)]
         DPUSH eax
         DPUSH ebx
-        .print:
-            cmp esi, 0
-            je .end_print
+        FCALL PUTS
 
-            ; push char
-            DSWAP
-            movzx eax, byte [esi]
-            DSWAP
-            DPUSH eax
-
-            FCALL PUTC
-
-            ; move cursors
-            inc dword [ebp - 4]
-            dec esi
-            jmp .print
-        .end_print:
+        int3 ; check that interrupts work
 
         .hang:
-            int3 ; will triple-fault if we f***ed up
+            hlt
             jmp .hang
     END_IMPL
 
@@ -339,9 +313,23 @@ START_SECTION IMPL_TABLE
         ret
     END_IMPL
 
-    ; placeholder interrupt handler
+    ; placeholder interrupt handler, currently just uses the stack of whatever was executing,
+    ; (should be fine since bootloader gives us a 32KB stack)
     IMPL_PRIM PLACEHOLDER_INT, 1
-        inc byte [0xb8000] ; so that it's visible something happened
+        pushad
+
+        add ebp, 4 ; in case the interrupt fired in the middle of a stack operation,
+                   ; to avoid corrupting any memory, we move one stack cell up
+
+        ; print interrupt message
+        mov eax, [0x7c20]
+        mov ebx, [eax + (int3_msg_len - GVCT_START)]
+        lea eax, [eax + (int3_msg - GVCT_START)]
+        DPUSH eax
+        DPUSH ebx
+        FCALL PUTS
+
+        popad
         iret
     END_IMPL
 
@@ -460,6 +448,7 @@ START_SECTION IMPL_TABLE
         ret
     END_IMPL
 
+    ; print a character to the console
     IMPL_PRIM PUTC, 1
         ; first scroll if the cursor'd overflow
         mov eax, [0x7c20]
@@ -513,6 +502,39 @@ START_SECTION IMPL_TABLE
             mov word [eax + (console_cursor - GVCT_START)], cx ; save cursor
             ret
     END_IMPL
+
+    ; print a string to the console, arguments are length and strptr
+    IMPL_PRIM PUTS, 1
+        .loop:
+            cmp esi, 0
+            je .end
+
+            ; push and print char
+            mov eax, [ebp - 4]
+            movzx eax, byte [eax]
+            DPUSH eax
+            FCALL PUTC
+
+            ; move cursors
+            inc dword [ebp - 4]
+            dec esi
+            jmp .loop
+        .end:
+        ret
+    END_IMPL
+END_SECTION
+
+; word descriptor table
+START_SECTION WD_TABLE
+    WORD_DESC INIT, 0
+    WORD_DESC INT_INIT, 0
+    WORD_DESC SET_INT, 0
+    WORD_DESC PLACEHOLDER_INT, 0
+    WORD_DESC CONSOLE_INIT, 0
+    WORD_DESC CLS, 0
+    WORD_DESC SCROLL, 0
+    WORD_DESC PUTC, 0
+    WORD_DESC PUTS, 0
 END_SECTION
 
 ; dictionary
@@ -525,6 +547,7 @@ START_SECTION DICT
     DICT_ENTRY CLS, "CLS"
     DICT_ENTRY SCROLL, "SCROLL"
     DICT_ENTRY PUTC, "PUTC"
+    DICT_ENTRY PUTS, "PUTS"
 END_SECTION
 
 ; global-variable & constant table
@@ -539,6 +562,9 @@ START_SECTION GVCT
 
     greeting db "Hello world!", 13, 10
     greeting_len dd $ - greeting
+
+    int3_msg db "Interrupt "
+    int3_msg_len dd $ - int3_msg
 
     ; struct used by the jmp far in INIT to reload CS
     init_jmpptr:
