@@ -172,6 +172,44 @@ org 0 ; not actually loaded at 0x00000000, but this gives us simple relative lab
     mov esi, dword [ebp]
 %endmacro
 
+; wait for approximately 1 microsecond by writing 0 to port 0x80
+%macro IO_WAIT 0
+    DPUSH eax
+    xor al, al
+    out 0x80, al
+    DPOPR eax
+%endmacro
+
+; pic io ports
+%define mPICc 0x20
+%define mPICd 0x21
+
+%define sPICc 0xa0
+%define sPICd 0xa1
+
+; where we'll map the PICs
+%define mPIC_offset 0x20
+%define sPIC_offset 0x28
+
+; shamelessly copied from osdev.org
+%define ICW1_ICW4 0x01 ; Indicates that ICW4 will be present
+%define ICW1_SINGLE	0x02 ; Single (cascade) mode
+%define ICW1_INTERVAL4 0x04 ; Call address interval 4 (8)
+%define ICW1_LEVEL 0x08 ; Level triggered (edge) mode
+%define ICW1_INIT 0x10 ; Initialization - required!
+
+%define ICW4_8086 0x01 ; 8086/88 (MCS-80/85) mode
+%define ICW4_AUTO 0x02 ; Auto (normal) EOI
+%define ICW4_BUF_SLAVE 0x08 ; Buffered mode/slave
+%define ICW4_BUF_MASTER 0x0C ; Buffered mode/master
+%define ICW4_SFNM 0x10 ; Special fully nested (not)
+
+%define CASCADE_IRQ 2
+
+; note, remember to always send EOI to master PIC when handling slave PIC interrupt,
+; even if it's a spurious IRQ
+%define PIC_EOI 0x20
+
 ; ----
 ; CODE
 ; ----
@@ -203,13 +241,13 @@ START_SECTION IMPL_TABLE
         mov fs, ax
         mov gs, ax
 
-        ; initialize and load interrupt descriptor table
+        ; initialize interrupt subsystem so we can bind service routines
         FCALL INT_INIT
 
-        ; set up int3 handler
-        DPUSH WDIDX(PLACEHOLDER_INT)
+        ; bind IRQ 0 handler
+        DPUSH WDIDX(PLACEHOLDER_INT) ; index of ISR
         DPUSH 0 ; interrupt gate
-        DPUSH 3 ; #BP
+        DPUSH 0x20 ; vector
         FCALL SET_INT
 
         ; initialize terminal
@@ -226,14 +264,27 @@ START_SECTION IMPL_TABLE
         DPUSH ebx
         FCALL PUTS
 
-        int3 ; check that interrupts work
+        int 0x20 ; check that we bound the ISR correctly
+
+        ; this here is a bit unstable (and will be removed later),
+        ; but it should be fine for testing since IRQ 0 only fires like 30 times a second or so
+
+        in al, mPICd ; get mask
+        and al, ~(1 << 0) ; IRQ 0
+        out mPICd, al ; set mask
+
+        sti ; if I did this right it shouldn't triple-fault
 
         .hang:
             hlt
             jmp .hang
     END_IMPL
 
-    ; load the IDT, and make each entry in it points to the corresponding IDeT entry in our flat code segment
+    ; initialize IDT, IDeT, PICs, and switch floating point errors to native mode,
+    ; essentially handles everything except for binding the final ISRs, note that this
+    ; does not enable interrupts, since you still need to bind your ISRs to the important
+    ; IRQs and exceptions first for safety. Also, you will still need to unmask the IRQs
+    ; that you want to receive.
     IMPL_PRIM INT_INIT, 1
         ; load IDT
         mov eax, [0x7c20]
@@ -266,6 +317,45 @@ START_SECTION IMPL_TABLE
             add edx, 8
             dec ecx
             jnz .loop
+
+        ; initialize master and slave 8259 PICs
+        mov al, ICW1_INIT | ICW1_ICW4
+        out mPICc, al
+        IO_WAIT
+        out sPICc, al
+        IO_WAIT
+
+        ; vector offsets
+        mov al, mPIC_offset
+        out mPICd, al
+        IO_WAIT
+        mov al, sPIC_offset
+        out sPICd, al
+        IO_WAIT
+
+        ; tell the PICs how to cascade IRQs
+        mov al, 1 << CASCADE_IRQ
+        out mPICd, al
+        IO_WAIT
+        mov al, CASCADE_IRQ
+        out sPICd, al
+        IO_WAIT
+
+        ; make them use the 8086 mode (and not 8080)
+        mov al, ICW4_8086
+        out mPICd, al
+        IO_WAIT
+        out sPICd, al
+
+        ; mask PICs
+        or al, 0xff
+        out mPICd, al
+        out sPICd, al
+
+        ; make the fpu deliver errors on interrupt vector 0
+        mov eax, cr0
+        or eax, 0x20
+        mov cr0, eax
         ret
     END_IMPL
 
@@ -273,11 +363,8 @@ START_SECTION IMPL_TABLE
     ; set that word idx as the interrupt handler, and set the type of the
     ; IDT entry at <interrupt_vector> to <gate_type> (0 = interrupt, -1 = trap)
 
-    ; Note, while interrupt handlers set by SET_INT do see changes to a word's impl,
-    ; they do not check the generation counter, so similarly to compiled word calls,
-    ; if you DELETE a word registered as an interrupt handler, and then DEFINE a new
-    ; word that happens to use the same descriptor slot, then rather than erroring,
-    ; the word will be dispatched to with most probably unintended and bad consequences
+    ; like calling words with FCALL, ISRs set by SET_INT can have their impl change,
+    ; but mismatched generation counters are not checked (only EXECUTE checks that)
     IMPL_PRIM SET_INT, 1
         ; set eax to the GVCT base
         mov eax, [0x7c20]
@@ -313,8 +400,9 @@ START_SECTION IMPL_TABLE
         ret
     END_IMPL
 
-    ; placeholder interrupt handler, currently just uses the stack of whatever was executing,
-    ; (should be fine since bootloader gives us a 32KB stack)
+    ; placeholder IRQ 0 handler, currently just uses the stack of whatever was executing,
+    ; (should be fine since bootloader gives us a 32KB stack, just don't bind this as a trap gate)
+    ; also, this calls a non-reentrant function, it's really not meant to be robust, just to give basic output
     IMPL_PRIM PLACEHOLDER_INT, 1
         pushad
 
@@ -328,6 +416,10 @@ START_SECTION IMPL_TABLE
         DPUSH eax
         DPUSH ebx
         FCALL PUTS
+
+        ; end of interrupt
+        mov al, PIC_EOI
+        out mPICc, al
 
         popad
         iret
@@ -448,9 +540,11 @@ START_SECTION IMPL_TABLE
         ret
     END_IMPL
 
-    ; print a character to the console
+    ; print a character to the console, note; this is not reentrant
     IMPL_PRIM PUTC, 1
         ; first scroll if the cursor'd overflow
+        ; TODO - this only covers the case where a normal character is being printed,
+        ; extend with the newline case, where we should scroll and return immediately if it would go out of bounds
         mov eax, [0x7c20]
         cmp word [eax + (console_cursor - GVCT_START)], 2000
         jb .no_scroll
