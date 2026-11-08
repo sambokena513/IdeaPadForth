@@ -297,16 +297,16 @@ START_SECTION IMPL_TABLE
             cmp ecx, 2000
             je .hang
 
-            mov word [0xb8000 + ecx*2 + 0*2], 'P' | (0x07 << 8)
+            mov word [0xb8000 + ecx*2 + 0*2], 'P' | (0x47 << 8)
             mov word [0xb8000 + ecx*2 + 1*2], 'A' | (0x17 << 8)
-            mov word [0xb8000 + ecx*2 + 2*2], 'N' | (0x07 << 8)
+            mov word [0xb8000 + ecx*2 + 2*2], 'N' | (0x47 << 8)
             mov word [0xb8000 + ecx*2 + 3*2], 'I' | (0x17 << 8)
-            mov word [0xb8000 + ecx*2 + 4*2], 'C' | (0x07 << 8)
+            mov word [0xb8000 + ecx*2 + 4*2], 'C' | (0x47 << 8)
 
             mov word [0xb8000 + ecx*2 + 5*2], '!' | (0x17 << 8)
-            mov word [0xb8000 + ecx*2 + 6*2], '!' | (0x07 << 8)
+            mov word [0xb8000 + ecx*2 + 6*2], '!' | (0x47 << 8)
             mov word [0xb8000 + ecx*2 + 7*2], '!' | (0x17 << 8)
-            mov word [0xb8000 + ecx*2 + 8*2], '!' | (0x07 << 8)
+            mov word [0xb8000 + ecx*2 + 8*2], '!' | (0x47 << 8)
             mov word [0xb8000 + ecx*2 + 9*2], '!' | (0x17 << 8)
 
             add ecx, 10
@@ -440,6 +440,8 @@ START_SECTION IMPL_TABLE
     ; placeholder IRQ 0 handler, currently just uses the stack of whatever was executing,
     ; (should be fine since bootloader gives us a 32KB stack, just don't bind this as a trap gate)
     ; also, this calls a non-reentrant function, it's really not meant to be robust, just to give basic output
+
+    ; TODO: make this just increment a tick counter instead, that'll also make it actually async-safe
     IMPL_PRIM PLACEHOLDER_INT, 1
         pushad
 
@@ -583,7 +585,7 @@ START_SECTION IMPL_TABLE
         ; TODO - this only covers the case where a normal character is being printed,
         ; extend with the newline case, where we should scroll and return immediately if it would go out of bounds
         mov eax, [0x7c20]
-        cmp word [eax + (console_cursor - GVCT_START)], 2000
+        cmp word [eax + (console_cursor - GVCT_START)], 1999 ; since the cursor is one ahead of the text we do 1999 instead of 2000
         jb .no_scroll
             FCALL SCROLL
         .no_scroll:
