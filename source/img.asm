@@ -389,7 +389,7 @@ START_SECTION IMPL_TABLE
         out mPICd, al
         out sPICd, al
 
-        ; make the fpu deliver errors on interrupt vector 0
+        ; make the fpu deliver errors on interrupt vector 16
         mov eax, cr0
         or eax, 0x20
         mov cr0, eax
