@@ -244,6 +244,11 @@ START_SECTION IMPL_TABLE
         ; initialize interrupt subsystem so we can bind service routines
         FCALL INT_INIT
 
+        DPUSH WDIDX(PANIC)
+        DPUSH 0
+        DPUSH 0x08
+        FCALL SET_INT
+
         ; bind IRQ 0 handler
         DPUSH WDIDX(PLACEHOLDER_INT) ; index of ISR
         DPUSH 0 ; interrupt gate
@@ -270,10 +275,42 @@ START_SECTION IMPL_TABLE
         ; but it should be fine for testing since IRQ 0 only fires like 30 times a second or so
 
         in al, mPICd ; get mask
-        and al, ~(1 << 0) ; IRQ 0
+        and al, ~(3 << 0) ; IRQ 0 and 1 (why 1, so that I can crash the image by pressing a key, now it's technically an interactive computer XD)
         out mPICd, al ; set mask
 
         sti ; if I did this right it shouldn't triple-fault
+
+        .hang:
+            hlt
+            jmp .hang
+    END_IMPL
+
+    ; to be used in case of unrecoverable errors, this function will:
+        ; disable interrupts (so that nothing can stop it)
+        ; fill the screen with the repeating strings "PANIC" and "!!!!!"
+        ; hang (at this point you should probably reboot)
+    IMPL_PRIM PANIC, 1
+        cli
+
+        xor ecx, ecx
+        .loop:
+            cmp ecx, 2000
+            je .hang
+
+            mov word [0xb8000 + ecx*2 + 0*2], 'P' | (0x07 << 8)
+            mov word [0xb8000 + ecx*2 + 1*2], 'A' | (0x17 << 8)
+            mov word [0xb8000 + ecx*2 + 2*2], 'N' | (0x07 << 8)
+            mov word [0xb8000 + ecx*2 + 3*2], 'I' | (0x17 << 8)
+            mov word [0xb8000 + ecx*2 + 4*2], 'C' | (0x07 << 8)
+
+            mov word [0xb8000 + ecx*2 + 5*2], '!' | (0x17 << 8)
+            mov word [0xb8000 + ecx*2 + 6*2], '!' | (0x07 << 8)
+            mov word [0xb8000 + ecx*2 + 7*2], '!' | (0x17 << 8)
+            mov word [0xb8000 + ecx*2 + 8*2], '!' | (0x07 << 8)
+            mov word [0xb8000 + ecx*2 + 9*2], '!' | (0x17 << 8)
+
+            add ecx, 10
+            jmp .loop
 
         .hang:
             hlt
@@ -621,6 +658,7 @@ END_SECTION
 ; word descriptor table
 START_SECTION WD_TABLE
     WORD_DESC INIT, 0
+    WORD_DESC PANIC, 0
     WORD_DESC INT_INIT, 0
     WORD_DESC SET_INT, 0
     WORD_DESC PLACEHOLDER_INT, 0
@@ -634,6 +672,7 @@ END_SECTION
 ; dictionary
 START_SECTION DICT
     DICT_ENTRY INIT, "INIT"
+    DICT_ENTRY PANIC, "PANIC"
     DICT_ENTRY INT_INIT, "INT_INIT"
     DICT_ENTRY SET_INT, "SET_INT"
     DICT_ENTRY PLACEHOLDER_INT, "PLACEHOLDER_INT"
