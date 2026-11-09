@@ -260,6 +260,11 @@ START_SECTION IMPL_TABLE
         DPUSH 0x20 ; vector
         FCALL SET_INT
 
+        DPUSH WDIDX(KEYBOARD_INT)
+        DPUSH 0
+        DPUSH 0x21 ; irq 1
+        FCALL SET_INT
+
         ; initialize terminal
         DPUSH 990 ; start just before the middle of the console
         DPUSH 0x17 ; cursor attr
@@ -492,6 +497,23 @@ START_SECTION IMPL_TABLE
         iret
     END_IMPL
 
+    ; irq 1 handler, currently just reads the scan code, the plan is to enqueue it into a ring buffer
+    IMPL_PRIM KEYBOARD_INT, 1
+        pushad
+
+        inc word [0xb8000] ; placeholder so we can tell when keys are pressed
+
+        ; read scan code (for now we ignore it)
+        in al, 0x60
+
+        ; send EOI
+        mov al, PIC_EOI
+        out mPICc, al
+
+        popad
+        iret
+    END_IMPL
+
     ; initialize or reinitialize the console, args are the attribute byte to use,
     ; attribute byte to use for the cursor, and initial software cursor position
     IMPL_PRIM CONSOLE_INIT, 1
@@ -705,6 +727,7 @@ START_SECTION WD_TABLE
     WORD_DESC INT_INIT, 0
     WORD_DESC SET_INT, 0
     WORD_DESC TIMER_INT, 0
+    WORD_DESC KEYBOARD_INT, 0
     WORD_DESC CONSOLE_INIT, 0
     WORD_DESC CLS, 0
     WORD_DESC SCROLL, 0
@@ -719,6 +742,7 @@ START_SECTION DICT
     DICT_ENTRY INT_INIT, "INT_INIT"
     DICT_ENTRY SET_INT, "SET_INT"
     DICT_ENTRY TIMER_INT, "TIMER_INT"
+    DICT_ENTRY KEYBOARD_INT, "KEYBOARD_INT"
     DICT_ENTRY CONSOLE_INIT, "CONSOLE_INIT"
     DICT_ENTRY CLS, "CLS"
     DICT_ENTRY SCROLL, "SCROLL"
