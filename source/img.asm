@@ -219,9 +219,14 @@ HEADER 0, WD_TABLE, IMPL_TABLE, DICT, GVCT
 ; word implementation table
 START_SECTION IMPL_TABLE
     IMPL_PRIM INIT, 1
+        mov eax, [0x7c20]
+
+        ; set tick counter to 0 since we just booted
+        mov dword [eax + (tkc_low - GVCT_START)], 0
+        mov dword [eax + (tkc_high - GVCT_START)], 0
+
         ; load GDT (technically we know the bootloader gives us a valid one since we are
         ; executing in protected mode, but we don't want to rely on the bootloader environment)
-        mov eax, [0x7c20]
         add dword [eax + (gdtr - GVCT_START) + 2], eax
         lgdt [eax + (gdtr - GVCT_START)]
         sub dword [eax + (gdtr - GVCT_START) + 2], eax
@@ -250,7 +255,7 @@ START_SECTION IMPL_TABLE
         FCALL SET_INT
 
         ; bind IRQ 0 handler
-        DPUSH WDIDX(PLACEHOLDER_INT) ; index of ISR
+        DPUSH WDIDX(TIMER_INT) ; index of ISR
         DPUSH 0 ; interrupt gate
         DPUSH 0x20 ; vector
         FCALL SET_INT
@@ -269,20 +274,53 @@ START_SECTION IMPL_TABLE
         DPUSH ebx
         FCALL PUTS
 
-        int 0x20 ; check that we bound the ISR correctly
-
-        ; this here is a bit unstable (and will be removed later),
-        ; but it should be fine for testing since IRQ 0 only fires like 30 times a second or so
-
         in al, mPICd ; get mask
-        and al, ~(3 << 0) ; IRQ 0 and 1 (why 1, so that I can crash the image by pressing a key, now it's technically an interactive computer XD)
+        and al, ~(3 << 0) ; IRQ 0 and 1 (why 1, so that I can crash the kernel by pressing a key, now it's technically an interactive computer XD)
         out mPICd, al ; set mask
 
-        sti ; if I did this right it shouldn't triple-fault
+        ; start main loop, for now it just prints "TIMER" whenever the tick counter changes
+        mov eax, [0x7c20]
+        mov ebx, dword [eax + (tkc_low - GVCT_START)]
+        mov ecx, dword [eax + (tkc_high - GVCT_START)]
+        .main_loop:
+            cli
 
-        .hang:
-            hlt
-            jmp .hang
+            ; check if tick counter changed
+            cmp ecx, dword [eax + (tkc_high - GVCT_START)]
+            jne .chg
+            cmp ebx, dword [eax + (tkc_low - GVCT_START)]
+            jne .chg
+
+            ; wait for next interrupt
+            .nochg:
+                sti
+                hlt
+                jmp .main_loop
+
+            ; print message and then halt again
+            .chg:
+                ; load new tick counter
+                mov ebx, dword [eax + (tkc_low - GVCT_START)]
+                mov ecx, dword [eax + (tkc_high - GVCT_START)]
+
+                sti
+
+                ; save state since we're about to make a function call
+                DPUSH ebx
+                DPUSH ecx
+
+                lea edx, [eax + (irq0_msg - GVCT_START)]
+                DPUSH edx
+                DPUSH dword [eax + (irq0_msg_len - GVCT_START)]
+                FCALL PUTS
+
+                ; restore state
+                DPOPR ecx
+                DPOPR ebx
+                mov eax, [0x7c20]
+
+                hlt
+                jmp .main_loop
     END_IMPL
 
     ; to be used in case of unrecoverable errors, this function will:
@@ -437,24 +475,14 @@ START_SECTION IMPL_TABLE
         ret
     END_IMPL
 
-    ; placeholder IRQ 0 handler, currently just uses the stack of whatever was executing,
-    ; (should be fine since bootloader gives us a 32KB stack, just don't bind this as a trap gate)
-    ; also, this calls a non-reentrant function, it's really not meant to be robust, just to give basic output
-
-    ; TODO: make this just increment a tick counter instead, that'll also make it actually async-safe
-    IMPL_PRIM PLACEHOLDER_INT, 1
+    ; irq 0 handler, increments a tick counter
+    IMPL_PRIM TIMER_INT, 1
         pushad
 
-        add ebp, 4 ; in case the interrupt fired in the middle of a stack operation,
-                   ; to avoid corrupting any memory, we move one stack cell up
-
-        ; print interrupt message
+        ; increment 64-bit tick counter
         mov eax, [0x7c20]
-        mov ebx, [eax + (int3_msg_len - GVCT_START)]
-        lea eax, [eax + (int3_msg - GVCT_START)]
-        DPUSH eax
-        DPUSH ebx
-        FCALL PUTS
+        add dword [eax + (tkc_low - GVCT_START)], 1
+        adc dword [eax + (tkc_high - GVCT_START)], 0
 
         ; end of interrupt
         mov al, PIC_EOI
@@ -579,16 +607,27 @@ START_SECTION IMPL_TABLE
         ret
     END_IMPL
 
-    ; print a character to the console, note; this is not reentrant
+    ; print a character to the console
     IMPL_PRIM PUTC, 1
-        ; first scroll if the cursor'd overflow
-        ; TODO - this only covers the case where a normal character is being printed,
-        ; extend with the newline case, where we should scroll and return immediately if it would go out of bounds
         mov eax, [0x7c20]
-        cmp word [eax + (console_cursor - GVCT_START)], 1999 ; since the cursor is one ahead of the text we do 1999 instead of 2000
-        jb .no_scroll
+
+        ; no need to scroll for carriage return, it doesn't move the cursor forward
+        cmp esi, 13
+        je .after_scroll 
+
+        ; first scroll if the cursor would overflow
+        cmp esi, 10
+        jne .no_ln_scroll
+            ; newline scroll
+            cmp word [eax + (console_cursor - GVCT_START)], 1920
+            jb .after_scroll
+                FCALL SCROLL
+        .no_ln_scroll:
+            ; normal char scroll
+            cmp word [eax + (console_cursor - GVCT_START)], 1999 ; since the cursor is one ahead of the text we do 1999 instead of 2000
+            jb .after_scroll
             FCALL SCROLL
-        .no_scroll:
+        .after_scroll:
 
         ; load values, al = char to print, bl = attribute byte for char, dl = attribute byte for cursor, cx = cursor
         mov eax, [0x7c20]
@@ -653,6 +692,8 @@ START_SECTION IMPL_TABLE
             dec esi
             jmp .loop
         .end:
+        DPOP
+        DPOP
         ret
     END_IMPL
 END_SECTION
@@ -663,7 +704,7 @@ START_SECTION WD_TABLE
     WORD_DESC PANIC, 0
     WORD_DESC INT_INIT, 0
     WORD_DESC SET_INT, 0
-    WORD_DESC PLACEHOLDER_INT, 0
+    WORD_DESC TIMER_INT, 0
     WORD_DESC CONSOLE_INIT, 0
     WORD_DESC CLS, 0
     WORD_DESC SCROLL, 0
@@ -677,7 +718,7 @@ START_SECTION DICT
     DICT_ENTRY PANIC, "PANIC"
     DICT_ENTRY INT_INIT, "INT_INIT"
     DICT_ENTRY SET_INT, "SET_INT"
-    DICT_ENTRY PLACEHOLDER_INT, "PLACEHOLDER_INT"
+    DICT_ENTRY TIMER_INT, "TIMER_INT"
     DICT_ENTRY CONSOLE_INIT, "CONSOLE_INIT"
     DICT_ENTRY CLS, "CLS"
     DICT_ENTRY SCROLL, "SCROLL"
@@ -690,6 +731,10 @@ START_SECTION GVCT
     here dd HERE_START - GVCT_START ; cursor in the constant table
     latest dd %$LATEST ; latest defined dictionary entry
 
+    ; tick counter, tells us the number of times IRQ 0 fired
+    tkc_low dd 0
+    tkc_high dd 0
+
     ; terminal variables
     console_cursor dw 0 ; current position in VGA text buffer
     console_attr db 0x07 ; attribute byte to use for characters
@@ -698,8 +743,8 @@ START_SECTION GVCT
     greeting db "Hello world!", 13, 10
     greeting_len dd $ - greeting
 
-    int3_msg db "Interrupt "
-    int3_msg_len dd $ - int3_msg
+    irq0_msg db "TIMER "
+    irq0_msg_len dd $ - irq0_msg
 
     ; struct used by the jmp far in INIT to reload CS
     init_jmpptr:
