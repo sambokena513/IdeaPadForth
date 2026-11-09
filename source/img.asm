@@ -246,27 +246,8 @@ START_SECTION IMPL_TABLE
         mov fs, ax
         mov gs, ax
 
-        ; initialize interrupt subsystem so we can bind service routines
-        FCALL INT_INIT
-
-        DPUSH WDIDX(PANIC)
-        DPUSH 0
-        DPUSH 0x08
-        FCALL SET_INT
-
-        ; bind IRQ 0 handler
-        DPUSH WDIDX(TIMER_INT) ; index of ISR
-        DPUSH 0 ; interrupt gate
-        DPUSH 0x20 ; vector
-        FCALL SET_INT
-
-        DPUSH WDIDX(KEYBOARD_INT)
-        DPUSH 0
-        DPUSH 0x21 ; irq 1
-        FCALL SET_INT
-
         ; initialize terminal
-        DPUSH 990 ; start just before the middle of the console
+        DPUSH 40 - ((greeting_len - greeting) / 2) ; our greeting message should appear in the top-middle
         DPUSH 0x17 ; cursor attr
         DPUSH 0x07 ; attribute byte
         FCALL CONSOLE_INIT
@@ -279,14 +260,52 @@ START_SECTION IMPL_TABLE
         DPUSH ebx
         FCALL PUTS
 
-        in al, mPICd ; get mask
-        and al, ~(3 << 0) ; IRQ 0 and 1 (why 1, so that I can crash the kernel by pressing a key, now it's technically an interactive computer XD)
-        out mPICd, al ; set mask
+        ; initialize interrupt subsystem so we can bind service routines
+        FCALL INT_INIT
 
-        ; start main loop, for now it just prints "TIMER" whenever the tick counter changes
+        ; start binding ISRs
+
+        ; panic on double faults and NMIs since those are generally unrecoverable
+        ; (NMIs usually get sent for RAM errors and double faults when we made a fuckup somewhere and didn't handle it)
+        DPUSH WDIDX(PANIC)
+        DPUSH 0
+        DPUSH 0x02 ; #NMI
+        FCALL SET_INT
+
+        DPUSH WDIDX(PANIC)
+        DPUSH 0
+        DPUSH 0x08 ; #DF
+        FCALL SET_INT
+
+        ; bind timer handler
+        DPUSH WDIDX(TIMER_INT) ; index of ISR
+        DPUSH 0
+        DPUSH 0x20 ; IRQ 0
+        FCALL SET_INT
+
+        ; bind keyboard handler
+        DPUSH WDIDX(KEYBOARD_INT)
+        DPUSH 0
+        DPUSH 0x21 ; IRQ 1
+        FCALL SET_INT
+
+        ; unmask IRQ 0 and 1 in the PIC since those are the only ones we handle
+        in al, mPICd
+        and al, ~((1 << 0) | (1 << 1))
+        out mPICd, al
+
+        ; finally, enter the main loop
+        FCALL KMAIN
+    END_IMPL
+
+    ; main loop
+    IMPL_PRIM KMAIN, 1
+        ; load GVCT_START and tick counter
         mov eax, [0x7c20]
         mov ebx, dword [eax + (tkc_low - GVCT_START)]
         mov ecx, dword [eax + (tkc_high - GVCT_START)]
+
+        ; currently our "main loop" just prints "TIMER" on every IRQ 0 tick
         .main_loop:
             cli
 
@@ -723,6 +742,7 @@ END_SECTION
 ; word descriptor table
 START_SECTION WD_TABLE
     WORD_DESC INIT, 0
+    WORD_DESC KMAIN, 0
     WORD_DESC PANIC, 0
     WORD_DESC INT_INIT, 0
     WORD_DESC SET_INT, 0
@@ -738,6 +758,7 @@ END_SECTION
 ; dictionary
 START_SECTION DICT
     DICT_ENTRY INIT, "INIT"
+    DICT_ENTRY KMAIN, "KMAIN"
     DICT_ENTRY PANIC, "PANIC"
     DICT_ENTRY INT_INIT, "INT_INIT"
     DICT_ENTRY SET_INT, "SET_INT"
