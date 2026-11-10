@@ -223,6 +223,7 @@ org 0 ; not actually loaded at 0x00000000, but this gives us simple relative lab
 %define PS2_KBD_ECHO 0xee
 %define PS2_KBD_ACK 0xfa
 %define PS2_KBD_RESEND 0xfe
+%define PS2_KBD_SET 0xf0
 
 ; commands
 %define PS2_TEST 0xaa
@@ -241,11 +242,11 @@ org 0 ; not actually loaded at 0x00000000, but this gives us simple relative lab
 
 ; maximum amount of allowed 0xfe (RESEND) responses
 ; before we assume a command is unsupported/failed
-%define PS2_KBD_MAX_RETRIES 3
+%define PS2_KBD_MAX_RETRIES 10
 
 ; maximum amount of times we perform a port read while waiting for a response
 ; before concluding the ps/2 controller is bricked
-%define PS2_TIMEOUT 100
+%define PS2_TIMEOUT 1000
 
 ; ----
 ; CODE
@@ -782,27 +783,40 @@ START_SECTION IMPL_TABLE
     ; note that this assumes the second ps/2 device does not exist, and ignores it
     IMPL_PRIM KEYBOARD_INIT, 1
         %macro PS2_WAIT_IBF 0 ; wait until a command is processed
-            mov ecx, PS2_TIMEOUT
             %%wait:
-                cmp ecx, 0
-                je .timeout
-                dec ecx
-
                 in al, PS2_STATUS
                 test al, 1 << 1
                 jnz %%wait
         %endmacro
 
         %macro PS2_WAIT_OBF 0 ; wait until a response byte is available
-            mov ecx, PS2_TIMEOUT
             %%wait:
-                cmp ecx, 0
-                je .timeout
-                dec ecx
-
                 in al, PS2_STATUS
                 test al, 1 << 0
                 jz %%wait
+        %endmacro
+
+        ; send a byte to ps/2 keyboard and wait for ACK, resending if it is not received
+        %macro PS2_KBD_COMMAND 1
+            mov edx, PS2_KBD_MAX_RETRIES
+            %%reset:
+            cmp edx, 0
+            je .panic
+            PS2_WAIT_IBF
+            mov al, %1
+            out PS2_DATA, al
+            %%response:
+            PS2_WAIT_OBF
+            in al, PS2_DATA
+            cmp al, PS2_KBD_ACK
+            je %%done
+            cmp al, PS2_KBD_RESEND
+            je %%resend
+                jmp %%response
+            %%resend:
+                dec edx
+                jmp %%reset
+            %%done:
         %endmacro
 
         ; first, disable devices so they don't interfere with initialization
@@ -815,10 +829,13 @@ START_SECTION IMPL_TABLE
         out PS2_COMMAND, al
 
         ; flush the output buffer
-        in al, PS2_STATUS
-        test al, 1 << 0
-        jnz .flushed
+        .flush:
+            in al, PS2_STATUS
+            test al, 1 << 0
+            jz .flushed
+
             in al, PS2_DATA ; read and discard
+            jmp .flush
         .flushed:
 
         ; configure ps/2 controller without translation, temporarily without IRQs
@@ -838,6 +855,7 @@ START_SECTION IMPL_TABLE
         PS2_WAIT_IBF
         mov al, PS2_WRITE_CFG
         out PS2_COMMAND, al
+        PS2_WAIT_IBF
         mov al, bl
         out PS2_DATA, al
 
@@ -848,15 +866,13 @@ START_SECTION IMPL_TABLE
         PS2_WAIT_OBF
         in al, PS2_DATA
         cmp al, PS2_SELFTEST_PASSED
-        je .controller_test_passed
-            FCALL PANIC ; reasoning: the keyboard is literally the only input method, 
-                        ; if it doesn't work there's no point in the OS continuing to run
-        .controller_test_passed:
+        jne .panic
 
         ; restore config since the self-test may reset it
         PS2_WAIT_IBF
         mov al, PS2_WRITE_CFG
         out PS2_COMMAND, al
+        PS2_WAIT_IBF
         mov al, bl ; we didn't touch bl so it still holds the saved config byte
         out PS2_DATA, al
 
@@ -866,9 +882,7 @@ START_SECTION IMPL_TABLE
         PS2_WAIT_OBF
         in al, PS2_DATA
         test al, al
-        jz .keyboard_test_passed
-            FCALL PANIC ; see reasoning for the other panic above
-        .keyboard_test_passed:
+        jnz .panic
 
         ; reenable IRQs now that we're finishing up initialization
 
@@ -886,6 +900,7 @@ START_SECTION IMPL_TABLE
         PS2_WAIT_IBF
         mov al, PS2_WRITE_CFG
         out PS2_COMMAND, al
+        PS2_WAIT_IBF
         mov al, bl
         out PS2_DATA, al
 
@@ -894,36 +909,28 @@ START_SECTION IMPL_TABLE
         mov al, PS2_ENABLE_A
         out PS2_COMMAND, al
 
-        ; last command now, reset the keyboard
-        mov edx, PS2_KBD_MAX_RETRIES
-        .reset:
-        cmp edx, 0
-        jne .try
-            FCALL PANIC
-        .try:
-        PS2_WAIT_IBF
-        mov al, PS2_KBD_RESET
-        out PS2_DATA, al
-        PS2_WAIT_OBF
-        in al, PS2_DATA
-        cmp al, PS2_KBD_ACK
-        je .next
-            dec edx
-            jmp .reset
-        .next:
+        ; reset the keyboard
+        PS2_KBD_COMMAND PS2_KBD_RESET
         PS2_WAIT_OBF
         in al, PS2_DATA
         cmp al, PS2_KBD_SELFTEST_PASSED
-        je .done
-            FCALL PANIC
-        .done:
+        jne .panic
+
+        ; finally, set scan code 2, this is the default and should already be set,
+        ; especially since we disabled translation, but just in case we'll set it here
+
+        ; set scan code command
+        PS2_KBD_COMMAND PS2_KBD_SET
+        ; scan code set number; 2
+        PS2_KBD_COMMAND 2
 
         PS2_WAIT_IBF ; don't return before the final command has been processed
         ret
 
-        ; has to be defined for our waiting macros to work
-        .timeout:
-            FCALL PANIC
+        .panic:
+            FCALL PANIC ; reasoning: this is an interactive OS with currently no input methods
+                        ; other than the keyboard, so if we cannot properly initialize it and
+                        ; use it, then there's no point in keeping the OS running
     END_IMPL
 END_SECTION
 
