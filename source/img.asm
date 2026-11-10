@@ -346,7 +346,7 @@ START_SECTION IMPL_TABLE
         mov ebx, dword [eax + (tkc_low - GVCT_START)]
         mov ecx, dword [eax + (tkc_high - GVCT_START)]
 
-        ; currently our "main loop" just prints "TIMER" on every IRQ 0 tick
+        ; currently our "main loop" just prints the tick counter on every IRQ 0 tick
         .main_loop:
             cli
 
@@ -362,7 +362,7 @@ START_SECTION IMPL_TABLE
                 hlt
                 jmp .main_loop
 
-            ; print message and then halt again
+            ; print tick counter and then halt again
             .chg:
                 ; load new tick counter
                 mov ebx, dword [eax + (tkc_low - GVCT_START)]
@@ -374,10 +374,12 @@ START_SECTION IMPL_TABLE
                 DPUSH ebx
                 DPUSH ecx
 
-                lea edx, [eax + (irq0_msg - GVCT_START)]
-                DPUSH edx
-                DPUSH dword [eax + (irq0_msg_len - GVCT_START)]
-                FCALL PUTS
+                DPUSH ebx
+                DPUSH ecx
+                DPUSH 13
+                FCALL PUTC
+                FCALL PUTH
+                FCALL PUTH
 
                 ; restore state
                 DPOPR ecx
@@ -780,7 +782,11 @@ START_SECTION IMPL_TABLE
     END_IMPL
 
     ; initialize the ps/2 controller and make sure the keyboard is using scan code set 2,
-    ; note that this assumes the second ps/2 device does not exist, and ignores it
+    ; note that this assumes the second ps/2 device does not exist, and ignores it,
+
+    ; TODO: should slightly rework this so it executes with IF = 1 and IRQ 0 unmasked, and
+    ; actually has timeouts (based on that 18.2Hz timer) so it won't hang forever,
+    ; also should push a success or error code instead of calling PANIC
     IMPL_PRIM KEYBOARD_INIT, 1
         %macro PS2_WAIT_IBF 0 ; wait until a command is processed
             %%wait:
@@ -919,7 +925,7 @@ START_SECTION IMPL_TABLE
         ; finally, set scan code 2, this is the default and should already be set,
         ; especially since we disabled translation, but just in case we'll set it here
 
-        ; set scan code command
+        ; set scan code set command
         PS2_KBD_COMMAND PS2_KBD_SET
         ; scan code set number; 2
         PS2_KBD_COMMAND 2
@@ -931,6 +937,36 @@ START_SECTION IMPL_TABLE
             FCALL PANIC ; reasoning: this is an interactive OS with currently no input methods
                         ; other than the keyboard, so if we cannot properly initialize it and
                         ; use it, then there's no point in keeping the OS running
+    END_IMPL
+
+    ; print a 32-bit unsigned hex integer, does not print the leading '0x' or a trailing '\n'
+    IMPL_PRIM PUTH, 1
+        mov ecx, 8
+        .loop:
+            rol esi, 4
+            mov eax, esi
+            and eax, 0xf
+
+            cmp eax, 10
+            jb .decimal
+
+            .hex:
+                lea eax, [eax + 'a' - 10]
+                jmp .tail
+
+            .decimal:
+                lea eax, [eax + '0']
+
+            .tail:
+            DPUSH ecx
+            DPUSH eax
+            FCALL PUTC
+            DPOPR ecx
+
+            dec ecx
+            jnz .loop
+        DPOP
+        ret
     END_IMPL
 END_SECTION
 
@@ -948,6 +984,7 @@ START_SECTION WD_TABLE
     WORD_DESC SCROLL, 0
     WORD_DESC PUTC, 0
     WORD_DESC PUTS, 0
+    WORD_DESC PUTH, 0
     WORD_DESC KEYBOARD_INIT, 0
 END_SECTION
 
@@ -965,6 +1002,7 @@ START_SECTION DICT
     DICT_ENTRY SCROLL, "SCROLL"
     DICT_ENTRY PUTC, "PUTC"
     DICT_ENTRY PUTS, "PUTS"
+    DICT_ENTRY PUTH, "PUTH"
     DICT_ENTRY KEYBOARD_INIT, "KEYBOARD_INIT"
 END_SECTION
 
@@ -982,11 +1020,8 @@ START_SECTION GVCT
     console_attr db 0x07 ; attribute byte to use for characters
     console_cursorattr db 0x17 ; attribute byte to use for the cell the cursor is on
 
-    greeting db "Hello world!", 13, 10
+    greeting db "FIF IMG REVISION 1", 13, 10
     greeting_len dd $ - greeting
-
-    irq0_msg db "TIMER "
-    irq0_msg_len dd $ - irq0_msg
 
     ; struct used by the jmp far in INIT to reload CS
     init_jmpptr:
