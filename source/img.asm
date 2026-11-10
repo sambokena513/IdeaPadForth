@@ -191,7 +191,7 @@ org 0 ; not actually loaded at 0x00000000, but this gives us simple relative lab
 %define mPIC_offset 0x20
 %define sPIC_offset 0x28
 
-; shamelessly copied from osdev.org
+; shamelessly copied from osdev.org, i have no idea what an ICW is
 %define ICW1_ICW4 0x01 ; Indicates that ICW4 will be present
 %define ICW1_SINGLE	0x02 ; Single (cascade) mode
 %define ICW1_INTERVAL4 0x04 ; Call address interval 4 (8)
@@ -209,6 +209,43 @@ org 0 ; not actually loaded at 0x00000000, but this gives us simple relative lab
 ; note, remember to always send EOI to master PIC when handling slave PIC interrupt,
 ; even if it's a spurious IRQ
 %define PIC_EOI 0x20
+
+; ps/2 controller stuff
+
+; ports
+%define PS2_DATA 0x60
+%define PS2_STATUS 0x64
+%define PS2_COMMAND 0x64
+
+; responses
+%define PS2_SELFTEST_PASSED 0x55
+%define PS2_KBD_SELFTEST_PASSED 0xaa
+%define PS2_KBD_ECHO 0xee
+%define PS2_KBD_ACK 0xfa
+%define PS2_KBD_RESEND 0xfe
+
+; commands
+%define PS2_TEST 0xaa
+%define PS2_KBD_RESET 0xff
+
+%define PS2_READ_CFG 0x20
+%define PS2_WRITE_CFG 0x60
+
+%define PS2_TEST_A 0xab
+%define PS2_ENABLE_A 0xae
+%define PS2_DISABLE_A 0xad
+
+%define PS2_TEST_B 0xa9
+%define PS2_ENABLE_B 0xa8
+%define PS2_DISABLE_B 0xa7
+
+; maximum amount of allowed 0xfe (RESEND) responses
+; before we assume a command is unsupported/failed
+%define PS2_KBD_MAX_RETRIES 3
+
+; maximum amount of times we perform a port read while waiting for a response
+; before concluding the ps/2 controller is bricked
+%define PS2_TIMEOUT 100
 
 ; ----
 ; CODE
@@ -259,6 +296,9 @@ START_SECTION IMPL_TABLE
         DPUSH eax
         DPUSH ebx
         FCALL PUTS
+
+        ; initialize keyboard controller and driver
+        FCALL KEYBOARD_INIT
 
         ; initialize interrupt subsystem so we can bind service routines
         FCALL INT_INIT
@@ -737,6 +777,154 @@ START_SECTION IMPL_TABLE
         DPOP
         ret
     END_IMPL
+
+    ; initialize the ps/2 controller and make sure the keyboard is using scan code set 2,
+    ; note that this assumes the second ps/2 device does not exist, and ignores it
+    IMPL_PRIM KEYBOARD_INIT, 1
+        %macro PS2_WAIT_IBF 0 ; wait until a command is processed
+            mov ecx, PS2_TIMEOUT
+            %%wait:
+                cmp ecx, 0
+                je .timeout
+                dec ecx
+
+                in al, PS2_STATUS
+                test al, 1 << 1
+                jnz %%wait
+        %endmacro
+
+        %macro PS2_WAIT_OBF 0 ; wait until a response byte is available
+            mov ecx, PS2_TIMEOUT
+            %%wait:
+                cmp ecx, 0
+                je .timeout
+                dec ecx
+
+                in al, PS2_STATUS
+                test al, 1 << 0
+                jz %%wait
+        %endmacro
+
+        ; first, disable devices so they don't interfere with initialization
+        PS2_WAIT_IBF
+        mov al, PS2_DISABLE_B
+        out PS2_COMMAND, al
+
+        PS2_WAIT_IBF
+        mov al, PS2_DISABLE_A
+        out PS2_COMMAND, al
+
+        ; flush the output buffer
+        in al, PS2_STATUS
+        test al, 1 << 0
+        jnz .flushed
+            in al, PS2_DATA ; read and discard
+        .flushed:
+
+        ; configure ps/2 controller without translation, temporarily without IRQs
+
+        ; get config byte
+        PS2_WAIT_IBF
+        mov al, PS2_READ_CFG
+        out PS2_COMMAND, al
+        PS2_WAIT_OBF
+        in al, PS2_DATA
+
+        ; disable irqs and translation for port 1, and enable the clock
+        and al, ~((1 << 0) | (1 << 6) | (1 << 4))
+        mov bl, al
+
+        ; set config byte
+        PS2_WAIT_IBF
+        mov al, PS2_WRITE_CFG
+        out PS2_COMMAND, al
+        mov al, bl
+        out PS2_DATA, al
+
+        ; perform controller self-test
+        PS2_WAIT_IBF
+        mov al, PS2_TEST
+        out PS2_COMMAND, al
+        PS2_WAIT_OBF
+        in al, PS2_DATA
+        cmp al, PS2_SELFTEST_PASSED
+        je .controller_test_passed
+            FCALL PANIC ; reasoning: the keyboard is literally the only input method, 
+                        ; if it doesn't work there's no point in the OS continuing to run
+        .controller_test_passed:
+
+        ; restore config since the self-test may reset it
+        PS2_WAIT_IBF
+        mov al, PS2_WRITE_CFG
+        out PS2_COMMAND, al
+        mov al, bl ; we didn't touch bl so it still holds the saved config byte
+        out PS2_DATA, al
+
+        PS2_WAIT_IBF
+        mov al, PS2_TEST_A
+        out PS2_COMMAND, al
+        PS2_WAIT_OBF
+        in al, PS2_DATA
+        test al, al
+        jz .keyboard_test_passed
+            FCALL PANIC ; see reasoning for the other panic above
+        .keyboard_test_passed:
+
+        ; reenable IRQs now that we're finishing up initialization
+
+        ; get config byte
+        PS2_WAIT_IBF
+        mov al, PS2_READ_CFG
+        out PS2_COMMAND, al
+        PS2_WAIT_OBF
+        in al, PS2_DATA
+
+        or al, 1 << 0 ; enable IRQs for device A
+        mov bl, al
+
+        ; set config byte
+        PS2_WAIT_IBF
+        mov al, PS2_WRITE_CFG
+        out PS2_COMMAND, al
+        mov al, bl
+        out PS2_DATA, al
+
+        ; enable keyboard
+        PS2_WAIT_IBF
+        mov al, PS2_ENABLE_A
+        out PS2_COMMAND, al
+
+        ; last command now, reset the keyboard
+        mov edx, PS2_KBD_MAX_RETRIES
+        .reset:
+        cmp edx, 0
+        jne .try
+            FCALL PANIC
+        .try:
+        PS2_WAIT_IBF
+        mov al, PS2_KBD_RESET
+        out PS2_DATA, al
+        PS2_WAIT_OBF
+        in al, PS2_DATA
+        cmp al, PS2_KBD_ACK
+        je .next
+            dec edx
+            jmp .reset
+        .next:
+        PS2_WAIT_OBF
+        in al, PS2_DATA
+        cmp al, PS2_KBD_SELFTEST_PASSED
+        je .done
+            FCALL PANIC
+        .done:
+
+        PS2_WAIT_IBF ; don't return before the final command has been processed
+        ret
+
+        ; has to be defined for our waiting macros to work
+        .timeout:
+            FCALL PANIC
+    END_IMPL
 END_SECTION
 
 ; word descriptor table
@@ -753,6 +941,7 @@ START_SECTION WD_TABLE
     WORD_DESC SCROLL, 0
     WORD_DESC PUTC, 0
     WORD_DESC PUTS, 0
+    WORD_DESC KEYBOARD_INIT, 0
 END_SECTION
 
 ; dictionary
@@ -769,6 +958,7 @@ START_SECTION DICT
     DICT_ENTRY SCROLL, "SCROLL"
     DICT_ENTRY PUTC, "PUTC"
     DICT_ENTRY PUTS, "PUTS"
+    DICT_ENTRY KEYBOARD_INIT, "KEYBOARD_INIT"
 END_SECTION
 
 ; global-variable & constant table
