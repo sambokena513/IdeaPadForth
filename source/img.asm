@@ -781,6 +781,36 @@ START_SECTION IMPL_TABLE
         ret
     END_IMPL
 
+    ; print a 32-bit unsigned hex integer, does not print the leading '0x' or a trailing '\n'
+    IMPL_PRIM PUTH, 1
+        mov ecx, 8
+        .loop:
+            rol esi, 4
+            mov eax, esi
+            and eax, 0xf
+
+            cmp eax, 10
+            jb .decimal
+
+            .hex:
+                lea eax, [eax + 'a' - 10]
+                jmp .tail
+
+            .decimal:
+                lea eax, [eax + '0']
+
+            .tail:
+            DPUSH ecx
+            DPUSH eax
+            FCALL PUTC
+            DPOPR ecx
+
+            dec ecx
+            jnz .loop
+        DPOP
+        ret
+    END_IMPL
+
     ; initialize the ps/2 controller and make sure the keyboard is using scan code set 2,
     ; note that this assumes the second ps/2 device does not exist, and ignores it,
 
@@ -938,36 +968,6 @@ START_SECTION IMPL_TABLE
                         ; other than the keyboard, so if we cannot properly initialize it and
                         ; use it, then there's no point in keeping the OS running
     END_IMPL
-
-    ; print a 32-bit unsigned hex integer, does not print the leading '0x' or a trailing '\n'
-    IMPL_PRIM PUTH, 1
-        mov ecx, 8
-        .loop:
-            rol esi, 4
-            mov eax, esi
-            and eax, 0xf
-
-            cmp eax, 10
-            jb .decimal
-
-            .hex:
-                lea eax, [eax + 'a' - 10]
-                jmp .tail
-
-            .decimal:
-                lea eax, [eax + '0']
-
-            .tail:
-            DPUSH ecx
-            DPUSH eax
-            FCALL PUTC
-            DPOPR ecx
-
-            dec ecx
-            jnz .loop
-        DPOP
-        ret
-    END_IMPL
 END_SECTION
 
 ; word descriptor table
@@ -1072,6 +1072,15 @@ START_SECTION GVCT
         dw 0 ; padding so that each entry becomes 8 bytes
     %endrep
     idet_end:
+
+    ; ring buffer for keyboard scan codes, written to by IRQ 1
+    align 4, db 0
+    scancode_buf db 256
+    sccd_buf_head dd 0
+    sccd_buf_tail dd 0
+    ; error code, 0 means fine and 1 means overflow,
+    ; the rest are not currently used
+    sccd_buf_error db 0
 
     HERE_START:
 END_SECTION
