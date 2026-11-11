@@ -228,6 +228,8 @@ org 0 ; not actually loaded at 0x00000000, but this gives us simple relative lab
 ; commands
 %define PS2_TEST 0xaa
 %define PS2_KBD_RESET 0xff
+%define PS2_KBD_SCANOFF 0xf5
+%define PS2_KBD_SCANON 0xf4
 
 %define PS2_READ_CFG 0x20
 %define PS2_WRITE_CFG 0x60
@@ -889,7 +891,28 @@ START_SECTION IMPL_TABLE
             %%done:
         %endmacro
 
-        ; first, disable devices so they don't interfere with initialization
+        ; flush the output buffer
+        %macro PS2_FLUSH_BUF 0
+            %%flush:
+                in al, PS2_STATUS
+                test al, 1 << 0
+                jz %%flushed
+
+                in al, PS2_DATA ; read and discard
+                jmp %%flush
+            %%flushed:
+        %endmacro
+
+        ; disable scanning on keyboard first just in case, because
+        ; in testing sometimes disabling the port itself is not enough,
+        ; and we still get scan codes interfering with the controller self-test
+        ; we don't check for an ACK/RESEND since we don't even know if the keyboard
+        ; is enabled right now, the output buffer flushing should catch anything that arrives later
+        PS2_WAIT_IBF
+        mov al, PS2_KBD_SCANOFF
+        out PS2_DATA, al
+
+        ; disable devices so they don't interfere with initialization
         PS2_WAIT_IBF
         mov al, PS2_DISABLE_B
         out PS2_COMMAND, al
@@ -898,17 +921,9 @@ START_SECTION IMPL_TABLE
         mov al, PS2_DISABLE_A
         out PS2_COMMAND, al
 
-        ; flush the output buffer
-        .flush:
-            in al, PS2_STATUS
-            test al, 1 << 0
-            jz .flushed
+        PS2_FLUSH_BUF
 
-            in al, PS2_DATA ; read and discard
-            jmp .flush
-        .flushed:
-
-        ; configure ps/2 controller without translation, temporarily without IRQs
+        ; configure ps/2 controller without translation
 
         ; get config byte
         PS2_WAIT_IBF
@@ -917,8 +932,8 @@ START_SECTION IMPL_TABLE
         PS2_WAIT_OBF
         in al, PS2_DATA
 
-        ; disable irqs and translation for port 1, and enable the clock
-        and al, ~((1 << 0) | (1 << 6) | (1 << 4))
+        ; disable translation for port 1, and enable the clock (no need to disable IRQs since IF = 0 here anyway)
+        and al, ~((1 << 6) | (1 << 4))
         mov bl, al
 
         ; set config byte
@@ -928,6 +943,16 @@ START_SECTION IMPL_TABLE
         PS2_WAIT_IBF
         mov al, bl
         out PS2_DATA, al
+
+        ; though we already flushed once, for some reason in testing I still get scan codes,
+        ; so we flush one more time right before the self-test. If I had to guess why,
+        ; then my hypothesis'd be that the PS/2 controller's pending data, and the keyboard's
+        ; pending data are not one and the same (at least not on all hardware), and the keyboard can only
+        ; move its data into the PS/2 output buffer while the clock signal is active, hence enabling it
+        ; causes us to get some pending data it was waiting to send before, and the first flush didn't
+        ; catch it since it only got the data that was already in the controller, and nothing could make
+        ; it through because the clock signal was disabled.
+        PS2_FLUSH_BUF
 
         ; perform controller self-test
         PS2_WAIT_IBF
@@ -954,7 +979,9 @@ START_SECTION IMPL_TABLE
         test al, al
         jnz .panic
 
-        ; reenable IRQs now that we're finishing up initialization
+        ; enable IRQs now that we're finishing up initialization
+        ; (you may think, but you never disabled them, surely they'd still be enabled?
+        ; but the issue there is we don't know if they were ever enabled in the first place)
 
         ; get config byte
         PS2_WAIT_IBF
@@ -986,13 +1013,17 @@ START_SECTION IMPL_TABLE
         cmp al, PS2_KBD_SELFTEST_PASSED
         jne .panic
 
-        ; finally, set scan code 2, this is the default and should already be set,
+        ; set scan code 2, this is the default and should already be set,
         ; especially since we disabled translation, but just in case we'll set it here
 
         ; set scan code set command
         PS2_KBD_COMMAND PS2_KBD_SET
         ; scan code set number; 2
         PS2_KBD_COMMAND 2
+
+        ; since we disabled scanning all the way at the start,
+        ; we need to reenable it here
+        PS2_KBD_COMMAND PS2_KBD_SCANON
 
         PS2_WAIT_IBF ; don't return before the final command has been processed
         ret
