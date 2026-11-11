@@ -341,53 +341,56 @@ START_SECTION IMPL_TABLE
 
     ; main loop
     IMPL_PRIM KMAIN, 1
-        ; load GVCT_START and tick counter
-        mov eax, [0x7c20]
-        mov ebx, dword [eax + (tkc_low - GVCT_START)]
-        mov ecx, dword [eax + (tkc_high - GVCT_START)]
-
-        ; currently our "main loop" just prints the tick counter on every IRQ 0 tick
+        ; currently our "main loop" just prints the tick counter on each tick,
+        ; together with all the scan codes received during that tick
         .main_loop:
+            mov eax, [0x7c20]
+
             cli
-
-            ; check if tick counter changed
-            cmp ecx, dword [eax + (tkc_high - GVCT_START)]
-            jne .chg
-            cmp ebx, dword [eax + (tkc_low - GVCT_START)]
-            jne .chg
-
-            ; wait for next interrupt
-            .nochg:
-                sti
-                hlt
-                jmp .main_loop
-
-            ; print tick counter and then halt again
-            .chg:
-                ; load new tick counter
-                mov ebx, dword [eax + (tkc_low - GVCT_START)]
-                mov ecx, dword [eax + (tkc_high - GVCT_START)]
-
-                sti
-
-                ; save state since we're about to make a function call
-                DPUSH ebx
-                DPUSH ecx
-
-                DPUSH ebx
-                DPUSH ecx
-                DPUSH 13
+                DPUSH dword [eax + (tkc_high - GVCT_START)]
+                FCALL PUTH
+                DPUSH dword [eax + (tkc_low - GVCT_START)]
+                FCALL PUTH
+                DPUSH 32
                 FCALL PUTC
-                FCALL PUTH
-                FCALL PUTH
+            sti
 
-                ; restore state
-                DPOPR ecx
-                DPOPR ebx
-                mov eax, [0x7c20]
+            .dequeue:
+                ; check if buffer is empty
+                cli
+                    mov eax, [0x7c20]
 
-                hlt
-                jmp .main_loop
+                    cmp byte [eax + (sccd_buf_error - GVCT_START)], 0
+                    je .no_error
+                        ; if any errors, reset the buffer
+                        mov dword [eax + (sccd_buf_tail - GVCT_START)], 0
+                        mov dword [eax + (sccd_buf_head - GVCT_START)], 0
+                        mov byte [eax + (sccd_buf_error - GVCT_START)], 0
+                    .no_error:
+
+                    mov ebx, [eax + (sccd_buf_tail - GVCT_START)]
+                    cmp ebx, [eax + (sccd_buf_head - GVCT_START)]
+                    je .end_dequeue
+
+                    and ebx, 255
+                    movzx edx, byte [eax + (sccd_buf - GVCT_START) + ebx]
+                    inc dword [eax + (sccd_buf_tail - GVCT_START)]
+                sti
+
+                DPUSH edx
+                FCALL PUTH
+                DPUSH 32
+                FCALL PUTC
+                jmp .dequeue
+            .end_dequeue:
+            sti
+
+            DPUSH 13
+            FCALL PUTC
+            DPUSH 10
+            FCALL PUTC
+            hlt
+            jmp .main_loop
     END_IMPL
 
     ; to be used in case of unrecoverable errors, this function will:
@@ -542,9 +545,15 @@ START_SECTION IMPL_TABLE
         ret
     END_IMPL
 
+    ; note, for now ISRs operate inside the same stack as the normal runtime,
+    ; just with a large offset, this is a temporary measure, once I have a physical
+    ; memory allocator I will use that at boot-time to reserve memory for separate runtime
+    ; and interrupt stacks
+
     ; irq 0 handler, increments a tick counter
     IMPL_PRIM TIMER_INT, 1
         pushad
+        add ebp, 1024
 
         ; increment 64-bit tick counter
         mov eax, [0x7c20]
@@ -562,12 +571,37 @@ START_SECTION IMPL_TABLE
     ; irq 1 handler, currently just reads the scan code, the plan is to enqueue it into a ring buffer
     IMPL_PRIM KEYBOARD_INT, 1
         pushad
+        add ebp, 1024
 
-        inc word [0xb8000] ; placeholder so we can tell when keys are pressed
-
-        ; read scan code (for now we ignore it)
+        ; read scan code into ebx
         in al, 0x60
+        movzx ebx, al
 
+        ; load gvct
+        mov eax, [0x7c20]
+
+        ; if there is already an error in the ring buffer,
+        ; don't enqueue anything more
+        cmp byte [eax + (sccd_buf_error - GVCT_START)], 0
+        jne .end
+
+        ; check if ring buffer is full, and load the write index into edx
+        mov edx, [eax + (sccd_buf_head - GVCT_START)]
+        mov ecx, edx
+        sub ecx, [eax + (sccd_buf_tail - GVCT_START)]
+        cmp ecx, 256
+        jne .good
+        ; if it is full, give the overflow error and return
+        mov byte [eax + (sccd_buf_error - GVCT_START)], 1
+        jmp .end
+
+        ; enqueue scan code into buffer
+        .good:
+        and edx, 255
+        mov byte [eax + (sccd_buf - GVCT_START) + edx], bl
+        inc dword [eax + (sccd_buf_head - GVCT_START)]
+
+        .end:
         ; send EOI
         mov al, PIC_EOI
         out mPICc, al
@@ -1074,8 +1108,11 @@ START_SECTION GVCT
     idet_end:
 
     ; ring buffer for keyboard scan codes, written to by IRQ 1
+    ; about the implementation, we do the unsigned wraparound
+    ; trick to avoid wasting one slot, and to make some operations
+    ; a little faster
     align 4, db 0
-    scancode_buf db 256
+    sccd_buf times 256 db 0
     sccd_buf_head dd 0
     sccd_buf_tail dd 0
     ; error code, 0 means fine and 1 means overflow,
