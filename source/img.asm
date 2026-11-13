@@ -360,8 +360,6 @@ START_SECTION IMPL_TABLE
             .dequeue:
                 ; check if buffer is empty
                 cli
-                    mov eax, [0x7c20]
-
                     cmp byte [eax + (sccd_buf_error - GVCT_START)], 0
                     je .no_error
                         ; if any errors, reset the buffer
@@ -373,11 +371,14 @@ START_SECTION IMPL_TABLE
                     mov ebx, [eax + (sccd_buf_tail - GVCT_START)]
                     cmp ebx, [eax + (sccd_buf_head - GVCT_START)]
                     je .end_dequeue
-
-                    and ebx, 255
-                    movzx edx, byte [eax + (sccd_buf - GVCT_START) + ebx]
-                    inc dword [eax + (sccd_buf_tail - GVCT_START)]
                 sti
+
+                ; this part can have interrupts since SPSC ring buffers
+                ; are safe to use without locks, we still need them above
+                ; though to avoid a lost wakeup problem
+                and ebx, 255
+                movzx edx, byte [eax + (sccd_buf - GVCT_START) + ebx]
+                inc dword [eax + (sccd_buf_tail - GVCT_START)]
 
                 DPUSH edx
                 FCALL PUTH
@@ -385,12 +386,13 @@ START_SECTION IMPL_TABLE
                 FCALL PUTC
                 jmp .dequeue
             .end_dequeue:
-            sti
 
             DPUSH 13
             FCALL PUTC
             DPUSH 10
             FCALL PUTC
+
+            sti
             hlt
             jmp .main_loop
     END_IMPL
@@ -1082,8 +1084,8 @@ START_SECTION GVCT
 
     ; terminal variables
     console_cursor dw 0 ; current position in VGA text buffer
-    console_attr db 0x07 ; attribute byte to use for characters
-    console_cursorattr db 0x17 ; attribute byte to use for the cell the cursor is on
+    console_attr db 0 ; attribute byte to use for characters
+    console_cursorattr db 0 ; attribute byte to use for the cell the cursor is on
 
     greeting db "FIF IMG REVISION 1", 13, 10
     greeting_len dd $ - greeting
@@ -1142,7 +1144,7 @@ START_SECTION GVCT
     ; about the implementation, we do the unsigned wraparound
     ; trick to avoid wasting one slot, and to make some operations
     ; a little faster
-    align 4, db 0
+    align 4, db 0 ; without this we could get torn writes into head and tail
     sccd_buf times 256 db 0
     sccd_buf_head dd 0
     sccd_buf_tail dd 0
