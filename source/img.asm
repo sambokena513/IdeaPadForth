@@ -165,6 +165,12 @@ org 0 ; not actually loaded at 0x00000000, but this gives us simple relative lab
     xchg esi, [ebp - 4]
 %endmacro
 
+; duplicate the TOS
+%macro DDUP 0
+    mov dword [ebp], esi
+    add ebp, 4
+%endmacro
+
 ; pop a value from the data stack into a specific register
 %macro DPOPR 1
     mov %1, esi
@@ -345,18 +351,59 @@ START_SECTION IMPL_TABLE
     IMPL_PRIM KMAIN, 1
         ; currently our "main loop" just prints the tick counter on each tick,
         ; together with all the scan codes received during that tick
-        .main_loop:
-            mov eax, [0x7c20]
 
+        mov eax, [0x7c20]
+        mov ebx, dword [eax + (tkc_high - GVCT_START)]
+        mov ecx, dword [eax + (tkc_low - GVCT_START)]
+        xor edx, edx
+
+        .main_loop:
             cli
-                DPUSH dword [eax + (tkc_high - GVCT_START)]
-                FCALL PUTH
-                DPUSH dword [eax + (tkc_low - GVCT_START)]
-                FCALL PUTH
-                DPUSH 32
-                FCALL PUTC
+                cmp ebx, dword [eax + (tkc_high - GVCT_START)]
+                jne .chg
+                cmp ecx, dword [eax + (tkc_low - GVCT_START)]
+                jne .chg
+                jmp .nochg
+                .chg:
+                    mov ebx, dword [eax + (tkc_high - GVCT_START)]
+                    mov ecx, dword [eax + (tkc_low - GVCT_START)]
+                    mov edx, -1
+                    jmp .after_check
+                .nochg:
+                    mov edx, 0
+            .after_check:
             sti
 
+            test edx, edx
+            jz .after_print
+
+            DPUSH eax
+            DPUSH ebx
+            DPUSH ecx
+            DPUSH edx
+
+            DPUSH ecx
+            DPUSH ebx
+            DPUSH 13
+            DPUSH 10
+            FCALL PUTC
+            FCALL PUTC
+            FCALL PUTH
+            FCALL PUTH
+
+            DPUSH 32
+            FCALL PUTC
+
+            DPOPR edx
+            DPOPR ecx
+            DPOPR ebx
+            DPOPR eax
+            .after_print:
+
+            DPUSH eax
+            DPUSH ebx
+            DPUSH ecx
+            DPUSH edx
             .dequeue:
                 ; check if buffer is empty
                 cli
@@ -386,12 +433,12 @@ START_SECTION IMPL_TABLE
                 FCALL PUTC
                 jmp .dequeue
             .end_dequeue:
+            DPOPR edx
+            DPOPR ecx
+            DPOPR ebx
+            DPOPR eax
 
-            DPUSH 13
-            FCALL PUTC
-            DPUSH 10
-            FCALL PUTC
-
+            .end:
             sti
             hlt
             jmp .main_loop
@@ -557,7 +604,7 @@ START_SECTION IMPL_TABLE
     ; irq 0 handler, increments a tick counter
     IMPL_PRIM TIMER_INT, 1
         pushad
-        add ebp, 1024
+        add ebp, 4096
 
         ; increment 64-bit tick counter
         mov eax, [0x7c20]
@@ -575,7 +622,7 @@ START_SECTION IMPL_TABLE
     ; irq 1 handler, currently just reads the scan code, the plan is to enqueue it into a ring buffer
     IMPL_PRIM KEYBOARD_INT, 1
         pushad
-        add ebp, 1024
+        add ebp, 4096
 
         ; read scan code into ebx
         in al, 0x60
@@ -1079,6 +1126,7 @@ START_SECTION GVCT
     latest dd %$LATEST ; latest defined dictionary entry
 
     ; tick counter, tells us the number of times IRQ 0 fired
+    align 4, db 0
     tkc_low dd 0
     tkc_high dd 0
 
