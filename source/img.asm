@@ -349,43 +349,26 @@ START_SECTION IMPL_TABLE
 
     ; main loop
     IMPL_PRIM KMAIN, 1
-        ; currently our "main loop" just prints the tick counter on each tick,
-        ; together with all the scan codes received during that tick
+        ; a simple superloop that calls all of the work handlers which have pending work,
+        ; currently this means it just prints the tick counter and received scancodes
 
         mov eax, [0x7c20]
-        mov ebx, dword [eax + (tkc_high - GVCT_START)]
-        mov ecx, dword [eax + (tkc_low - GVCT_START)]
-        xor edx, edx
-
         .main_loop:
+            test dword [eax + (pending_work - GVCT_START)], 1 << 0
+            jz .skip_0
+
+            ; interrupts disabled here so that the following can't happen:
+                ; IRQ 0 fires, we print the tick, IRQ 0 fires again, we don't notice and clear the flag
             cli
-                cmp ebx, dword [eax + (tkc_high - GVCT_START)]
-                jne .chg
-                cmp ecx, dword [eax + (tkc_low - GVCT_START)]
-                jne .chg
-                jmp .nochg
-                .chg:
-                    mov ebx, dword [eax + (tkc_high - GVCT_START)]
-                    mov ecx, dword [eax + (tkc_low - GVCT_START)]
-                    mov edx, -1
-                    jmp .after_check
-                .nochg:
-                    mov edx, 0
-            .after_check:
-            sti
-
-            test edx, edx
-            jz .after_print
-
             DPUSH eax
             DPUSH ebx
             DPUSH ecx
             DPUSH edx
 
-            DPUSH ecx
-            DPUSH ebx
-            DPUSH 13
+            DPUSH dword [eax + (tkc_low - GVCT_START)]
+            DPUSH dword [eax + (tkc_high - GVCT_START)]
             DPUSH 10
+            DPUSH 13
             FCALL PUTC
             FCALL PUTC
             FCALL PUTH
@@ -398,50 +381,75 @@ START_SECTION IMPL_TABLE
             DPOPR ecx
             DPOPR ebx
             DPOPR eax
-            .after_print:
+
+            and dword [eax + (pending_work - GVCT_START)], ~(1 << 0)
+            sti
+            .skip_0:
+
+            test dword [eax + (pending_work - GVCT_START)], 1 << 1
+            jz .skip_1
 
             DPUSH eax
             DPUSH ebx
             DPUSH ecx
             DPUSH edx
-            .dequeue:
-                ; check if buffer is empty
-                cli
-                    cmp byte [eax + (sccd_buf_error - GVCT_START)], 0
-                    je .no_error
-                        ; if any errors, reset the buffer
-                        mov dword [eax + (sccd_buf_tail - GVCT_START)], 0
-                        mov dword [eax + (sccd_buf_head - GVCT_START)], 0
-                        mov byte [eax + (sccd_buf_error - GVCT_START)], 0
-                    .no_error:
-
-                    mov ebx, [eax + (sccd_buf_tail - GVCT_START)]
-                    cmp ebx, [eax + (sccd_buf_head - GVCT_START)]
-                    je .end_dequeue
-                sti
-
-                ; this part can have interrupts since SPSC ring buffers
-                ; are safe to use without locks, we still need them above
-                ; though to avoid a lost wakeup problem
-                and ebx, 255
-                movzx edx, byte [eax + (sccd_buf - GVCT_START) + ebx]
-                inc dword [eax + (sccd_buf_tail - GVCT_START)]
-
-                DPUSH edx
-                FCALL PUTH
-                DPUSH 32
-                FCALL PUTC
-                jmp .dequeue
-            .end_dequeue:
+            FCALL KEYBOARD_DRIVER
             DPOPR edx
             DPOPR ecx
             DPOPR ebx
             DPOPR eax
+            .skip_1:
 
             .end:
+            cli
+            cmp dword [eax + (pending_work - GVCT_START)], 0
+            jne .work
+
+            .no_work:
             sti
             hlt
             jmp .main_loop
+
+            .work:
+            sti
+            jmp .main_loop
+    END_IMPL
+
+    ; process scan codes (currently just prints them)
+    IMPL_PRIM KEYBOARD_DRIVER, 1
+        mov eax, [0x7c20]
+        .dequeue:
+            ; check if buffer is empty
+            cli
+                cmp byte [eax + (sccd_buf_error - GVCT_START)], 0
+                je .no_error
+                    ; if any errors, reset the buffer
+                    mov dword [eax + (sccd_buf_tail - GVCT_START)], 0
+                    mov dword [eax + (sccd_buf_head - GVCT_START)], 0
+                    mov byte [eax + (sccd_buf_error - GVCT_START)], 0
+                .no_error:
+
+                mov ebx, [eax + (sccd_buf_tail - GVCT_START)]
+                cmp ebx, [eax + (sccd_buf_head - GVCT_START)]
+                je .end_dequeue
+            sti
+
+            ; this part can have interrupts since SPSC ring buffers
+            ; are safe to use without locks, we still need them above
+            ; though to avoid a lost wakeup problem
+            and ebx, 255
+            movzx edx, byte [eax + (sccd_buf - GVCT_START) + ebx]
+            inc dword [eax + (sccd_buf_tail - GVCT_START)]
+
+            DPUSH edx
+            FCALL PUTH
+            DPUSH 32
+            FCALL PUTC
+            jmp .dequeue
+        .end_dequeue:
+        and dword [eax + (pending_work - GVCT_START)], ~(1 << 1) ; clear pending work bit for IRQ 1
+        sti
+        ret
     END_IMPL
 
     ; to be used in case of unrecoverable errors, this function will:
@@ -608,6 +616,8 @@ START_SECTION IMPL_TABLE
 
         ; increment 64-bit tick counter
         mov eax, [0x7c20]
+        or dword [eax + (pending_work - GVCT_START)], 1 << 0 ; set IRQ 0 pending work
+
         add dword [eax + (tkc_low - GVCT_START)], 1
         adc dword [eax + (tkc_high - GVCT_START)], 0
 
@@ -630,6 +640,7 @@ START_SECTION IMPL_TABLE
 
         ; load gvct
         mov eax, [0x7c20]
+        or dword [eax + (pending_work - GVCT_START)], 1 << 1 ; set IRQ 1 pending work
 
         ; if there is already an error in the ring buffer,
         ; don't enqueue anything more
@@ -1088,6 +1099,7 @@ END_SECTION
 START_SECTION WD_TABLE
     WORD_DESC INIT, 0
     WORD_DESC KMAIN, 0
+    WORD_DESC KEYBOARD_DRIVER, 0
     WORD_DESC PANIC, 0
     WORD_DESC INT_INIT, 0
     WORD_DESC SET_INT, 0
@@ -1106,6 +1118,7 @@ END_SECTION
 START_SECTION DICT
     DICT_ENTRY INIT, "INIT"
     DICT_ENTRY KMAIN, "KMAIN"
+    DICT_ENTRY KEYBOARD_DRIVER, "KEYBOARD_DRIVER"
     DICT_ENTRY PANIC, "PANIC"
     DICT_ENTRY INT_INIT, "INT_INIT"
     DICT_ENTRY SET_INT, "SET_INT"
@@ -1126,9 +1139,14 @@ START_SECTION GVCT
     latest dd %$LATEST ; latest defined dictionary entry
 
     ; tick counter, tells us the number of times IRQ 0 fired
-    align 4, db 0
     tkc_low dd 0
     tkc_high dd 0
+
+    ; bitmap that represents runnable tasks,
+    ; ISRs set bits here, and the deferred handlers
+    ; clear them,
+    ; the superloop in KMAIN invokes the respective handlers
+    pending_work dd 0
 
     ; terminal variables
     console_cursor dw 0 ; current position in VGA text buffer
