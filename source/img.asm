@@ -416,7 +416,11 @@ START_SECTION IMPL_TABLE
             jmp .main_loop
     END_IMPL
 
-    ; process scan codes (currently just prints them)
+    ; process scan code into key events and put them into the main keyboard consumer's ring buffer,
+    ; a key event in this system is an 8-bit integer consisting of a 7-bit keycode from 1 to 104 (0 is reserved),
+    ; and a top flag bit that is clear for key *presses* and set for key *releases*.
+
+    ; note that currently this is a placeholder implementation that simply prints and discards received scan codes
     IMPL_PRIM KEYBOARD_DRIVER, 1
         .dequeue:
             mov eax, [0x7c20]
@@ -451,10 +455,6 @@ START_SECTION IMPL_TABLE
                         ; print screen break = 0xe0 0xf0 0x7c 0xe0 0xf0 0x12
                     ; how to distinguish: 0xe1 is not used by anything other than pause
                         ; pause pressed = 0xe1 0x14 0x77 0xe1 0xf0 0x14 0xf0 0x77
-
-                ; key code numbers - I'll just borrow an idea from the osdev wiki and make the key
-                ;   events be an 8-bit integer where the top 3 bits are the row, and the remaining 5
-                ;   the column of the key on a standard 104-key keyboard
 
             ; this part can have interrupts since SPSC ring buffers
             ; are safe to use without locks, we still need them above
@@ -1247,10 +1247,13 @@ START_SECTION GVCT
         db %2
     %endmacro
 
-    ; maps scancode set 2 values to our internal 8-bit keycodes
+    ; maps scancode set 2 values to our internal 7-bit keycodes
     keycode_map:
     START_MAPPING 256
-        ; todo, I first have to look up where the keys are on a "normal" keyboard since I've only ever used reduced ones
+        MAP_IDX 0x01 0x01 ; f9
+        MAP_IDX 0x03 0x02 ; f5
+        MAP_IDX 0x04 0x03 ; f3
+        MAP_IDX 0x0
     STOP_MAPPING
     START_MAPPING 256
 
@@ -1258,7 +1261,7 @@ START_SECTION GVCT
 
     ; key code state, for each key this can be 0 or 1 representing whether it's pressed
     kbd_state:
-    times 256 db 0
+    times 128 db 0
 
     ; ring buffer for keyboard scan codes, written to by IRQ 1
     ; about the implementation, we do the unsigned wraparound
