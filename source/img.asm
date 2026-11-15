@@ -452,6 +452,10 @@ START_SECTION IMPL_TABLE
                     ; how to distinguish: 0xe1 is not used by anything other than pause
                         ; pause pressed = 0xe1 0x14 0x77 0xe1 0xf0 0x14 0xf0 0x77
 
+                ; key code numbers - I'll just borrow an idea from the osdev wiki and make the key
+                ;   events be an 8-bit integer where the top 3 bits are the row, and the remaining 5
+                ;   the column of the key on a standard 104-key keyboard
+
             ; this part can have interrupts since SPSC ring buffers
             ; are safe to use without locks, we still need them above
             ; though to avoid a lost wakeup problem
@@ -1223,6 +1227,38 @@ START_SECTION GVCT
         dw 0 ; padding so that each entry becomes 8 bytes
     %endrep
     idet_end:
+
+    ; start mapping indices in a sparse array to values
+    %macro START_MAPPING 1
+        %push map_ctx
+        %$map:
+        %assign %$map_len %1
+    %endmacro
+
+    ; stop mapping indices to values
+    %macro STOP_MAPPING 0
+        times ((%$map + %$map_len) - $) db 0
+        %pop
+    %endmacro
+
+    ; map a specific index in the current map to a value
+    %macro MAP_IDX 2
+        times (%1 - ($ - %$map)) db 0
+        db %2
+    %endmacro
+
+    ; maps scancode set 2 values to our internal 8-bit keycodes
+    keycode_map:
+    START_MAPPING 256
+        ; todo, I first have to look up where the keys are on a "normal" keyboard since I've only ever used reduced ones
+    STOP_MAPPING
+    START_MAPPING 256
+
+    STOP_MAPPING
+
+    ; key code state, for each key this can be 0 or 1 representing whether it's pressed
+    kbd_state:
+    times 256 db 0
 
     ; ring buffer for keyboard scan codes, written to by IRQ 1
     ; about the implementation, we do the unsigned wraparound
