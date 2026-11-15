@@ -2,10 +2,10 @@
 ;  img.asm
 ;
 ;  Copyright (C) 2026 Samuel Peciar
-;  
+;
 ;  This program is free software: you can redistribute it and/or modify
 ;  it under the terms of the GNU General Public License as published by
-;  the Free Software Foundation, either version 3 of the License, or 
+;  the Free Software Foundation, either version 3 of the License, or
 ;  any later version.
 
 
@@ -36,7 +36,7 @@ org 0 ; not actually loaded at 0x00000000, but this gives us simple relative lab
 ; size of a word descriptor struct
 %define WDDESC_SIZE 12
 
-; generate image header from sections 
+; generate image header from sections
 %macro HEADER 1-*
     ALIGN_LBLK
 
@@ -815,7 +815,7 @@ START_SECTION IMPL_TABLE
 
         ; no need to scroll for carriage return, it doesn't move the cursor forward
         cmp esi, 13
-        je .after_scroll 
+        je .after_scroll
 
         ; first scroll if the cursor would overflow
         cmp esi, 10
@@ -1250,13 +1250,131 @@ START_SECTION GVCT
     ; maps scancode set 2 values to our internal 7-bit keycodes
     keycode_map:
     START_MAPPING 256
-        MAP_IDX 0x01 0x01 ; f9
-        MAP_IDX 0x03 0x02 ; f5
-        MAP_IDX 0x04 0x03 ; f3
-        MAP_IDX 0x0
+        MAP_IDX 0x01, 0x01 ; F9
+        MAP_IDX 0x03, 0x02 ; F5
+        MAP_IDX 0x04, 0x03 ; F3
+        MAP_IDX 0x05, 0x04 ; F1
+        MAP_IDX 0x06, 0x05 ; F2
+        MAP_IDX 0x07, 0x06 ; F12
+        MAP_IDX 0x09, 0x07 ; F10
+        MAP_IDX 0x0A, 0x08 ; F8
+        MAP_IDX 0x0B, 0x09 ; F6
+        MAP_IDX 0x0C, 0x0a ; F4
+        MAP_IDX 0x0D, 0x0b ; tab
+        MAP_IDX 0x0E, 0x0c ; ` (back tick)
+        MAP_IDX 0x11, 0x0d ; left alt
+        MAP_IDX 0x12, 0x0e ; left shift
+        MAP_IDX 0x14, 0x0f ; left control
+        MAP_IDX 0x15, 0x10 ; Q
+        MAP_IDX 0x16, 0x11 ; 1
+        MAP_IDX 0x1A, 0x12 ; Z
+        MAP_IDX 0x1B, 0x13 ; S
+        MAP_IDX 0x1C, 0x14 ; A
+        MAP_IDX 0x1D, 0x15 ; W
+        MAP_IDX 0x1E, 0x16 ; 2
+        MAP_IDX 0x21, 0x17 ; C
+        MAP_IDX 0x22, 0x18 ; X
+        MAP_IDX 0x23, 0x19 ; D
+        MAP_IDX 0x24, 0x1a ; E
+        MAP_IDX 0x25, 0x1b ; 4
+        MAP_IDX 0x26, 0x1c ; 3
+        MAP_IDX 0x29, 0x1d ; space
+        MAP_IDX 0x2A, 0x1e ; V
+        MAP_IDX 0x2B, 0x1f ; F
+        MAP_IDX 0x2C, 0x20 ; T
+        MAP_IDX 0x2D, 0x21 ; R
+        MAP_IDX 0x2E, 0x22 ; 5
+        MAP_IDX 0x31, 0x23 ; N
+        MAP_IDX 0x32, 0x24 ; B
+        MAP_IDX 0x33, 0x25 ; H
+        MAP_IDX 0x34, 0x26 ; G
+        MAP_IDX 0x35, 0x27 ; Y
+        MAP_IDX 0x36, 0x28 ; 6
+        MAP_IDX 0x3A, 0x29 ; M
+        MAP_IDX 0x3B, 0x2a ; J
+        MAP_IDX 0x3C, 0x2b ; U
+        MAP_IDX 0x3D, 0x2c ; 7
+        MAP_IDX 0x3E, 0x2d ; 8
+        MAP_IDX 0x41, 0x2e ; ,
+        MAP_IDX 0x42, 0x2f ; K
+        MAP_IDX 0x43, 0x30 ; I
+        MAP_IDX 0x44, 0x31 ; O
+        MAP_IDX 0x45, 0x32 ; 0 (zero)
+        MAP_IDX 0x46, 0x33 ; 9
+        MAP_IDX 0x49, 0x34 ; .
+        MAP_IDX 0x4A, 0x35 ; /
+        MAP_IDX 0x4B, 0x36 ; L
+        MAP_IDX 0x4C, 0x37 ; ;
+        MAP_IDX 0x4D, 0x38 ; P
+        MAP_IDX 0x4E, 0x39 ; -
+        MAP_IDX 0x52, 0x3a ; '
+        MAP_IDX 0x54, 0x3b ; [
+        MAP_IDX 0x55, 0x3c ; =
+        MAP_IDX 0x58, 0x3d ; CapsLock
+        MAP_IDX 0x59, 0x3e ; right shift
+        MAP_IDX 0x5A, 0x3f ; enter
+        MAP_IDX 0x5B, 0x40 ; ]
+        MAP_IDX 0x5D, 0x41 ; \
+        MAP_IDX 0x66, 0x42 ; backspace
+        MAP_IDX 0x69, 0x43 ; (keypad) 1
+        MAP_IDX 0x6B, 0x44 ; (keypad) 4
+        MAP_IDX 0x6C, 0x45 ; (keypad) 7
+        MAP_IDX 0x70, 0x46 ; (keypad) 0
+        MAP_IDX 0x71, 0x47 ; (keypad) .
+        MAP_IDX 0x72, 0x48 ; (keypad) 2
+        MAP_IDX 0x73, 0x49 ; (keypad) 5
+        MAP_IDX 0x74, 0x4a ; (keypad) 6
+        MAP_IDX 0x75, 0x4b ; (keypad) 8
+        MAP_IDX 0x76, 0x4c ; escape
+        MAP_IDX 0x77, 0x4d ; NumberLock
+        MAP_IDX 0x78, 0x4e ; F11
+        MAP_IDX 0x79, 0x4f ; (keypad) +
+        MAP_IDX 0x7A, 0x50 ; (keypad) 3
+        MAP_IDX 0x7B, 0x51 ; (keypad) -
+        MAP_IDX 0x7C, 0x52 ; (keypad) *
+        MAP_IDX 0x7D, 0x53 ; (keypad) 9
+        MAP_IDX 0x7E, 0x54 ; ScrollLock
+        MAP_IDX 0x83, 0x55 ; F7
     STOP_MAPPING
     START_MAPPING 256
-
+        MAP_IDX 0x10, 0x56 ; (multimedia) WWW search
+        MAP_IDX 0x11, 0x57 ; right alt
+        MAP_IDX 0x14, 0x58 ; right control
+        MAP_IDX 0x15, 0x59 ; (multimedia) previous track
+        MAP_IDX 0x18, 0x5a ; (multimedia) WWW favourites
+        MAP_IDX 0x1F, 0x5b ; left GUI
+        MAP_IDX 0x20, 0x5c ; (multimedia) WWW refresh
+        MAP_IDX 0x21, 0x5d ; (multimedia) volume down
+        MAP_IDX 0x23, 0x5e ; (multimedia) mute
+        MAP_IDX 0x27, 0x5f ; right GUI
+        MAP_IDX 0x28, 0x60 ; (multimedia) WWW stop
+        MAP_IDX 0x2B, 0x61 ; (multimedia) calculator
+        MAP_IDX 0x2F, 0x62 ; apps
+        MAP_IDX 0x30, 0x63 ; (multimedia) WWW forward
+        MAP_IDX 0x32, 0x64 ; (multimedia) volume up
+        MAP_IDX 0x34, 0x65 ; (multimedia) play/pause
+        MAP_IDX 0x37, 0x66 ; (ACPI) power
+        MAP_IDX 0x38, 0x67 ; (multimedia) WWW back
+        MAP_IDX 0x3A, 0x68 ; (multimedia) WWW home
+        MAP_IDX 0x3B, 0x69 ; (multimedia) stop
+        MAP_IDX 0x3F, 0x6a ; (ACPI) sleep
+        MAP_IDX 0x40, 0x6b ; (multimedia) my computer
+        MAP_IDX 0x48, 0x6c ; (multimedia) email
+        MAP_IDX 0x4A, 0x6d ; (keypad) /
+        MAP_IDX 0x4D, 0x6e ; (multimedia) next track
+        MAP_IDX 0x50, 0x6f ; (multimedia) media select
+        MAP_IDX 0x5A, 0x70 ; (keypad) enter
+        MAP_IDX 0x5E, 0x71 ; (ACPI) wake
+        MAP_IDX 0x69, 0x72 ; end
+        MAP_IDX 0x6B, 0x73 ; cursor left
+        MAP_IDX 0x6C, 0x74 ; home
+        MAP_IDX 0x70, 0x75 ; insert
+        MAP_IDX 0x71, 0x76 ; delete
+        MAP_IDX 0x72, 0x77 ; cursor down
+        MAP_IDX 0x74, 0x78 ; cursor right
+        MAP_IDX 0x75, 0x79 ; cursor up
+        MAP_IDX 0x7A, 0x7a ; page down
+        MAP_IDX 0x7D, 0x7b ; page up
     STOP_MAPPING
 
     ; key code state, for each key this can be 0 or 1 representing whether it's pressed
