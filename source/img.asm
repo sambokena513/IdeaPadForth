@@ -406,6 +406,7 @@ START_SECTION IMPL_TABLE
             jne .work
 
             .no_work:
+            inc byte [0xb8000 + 79*2]
             sti
             hlt
             jmp .main_loop
@@ -417,8 +418,8 @@ START_SECTION IMPL_TABLE
 
     ; process scan codes (currently just prints them)
     IMPL_PRIM KEYBOARD_DRIVER, 1
-        mov eax, [0x7c20]
         .dequeue:
+            mov eax, [0x7c20]
             ; check if buffer is empty
             cli
                 cmp byte [eax + (sccd_buf_error - GVCT_START)], 0
@@ -433,6 +434,23 @@ START_SECTION IMPL_TABLE
                 cmp ebx, [eax + (sccd_buf_head - GVCT_START)]
                 je .end_dequeue
             sti
+
+            ; todo: make this actually emit key events
+                ; basic grammar
+                    ; <code> ::= byte
+                    ; <ext> ::= 0xe0
+                    ; <release> ::= 0xf0
+                    ; <key-press> ::= [ <ext> ] <code>
+                    ; <key-release> ::= [ <ext> ] <release> <code>
+                    ; <key> ::= <key-press> | <key-release>
+
+                ; exceptions:
+                    ; how to distinguish: no real key exists with the extended code 0x12,
+                    ; left shift does not have the 0xe0 prefix
+                        ; print screen make = 0xe0 0x12 0x30 0x7c
+                        ; print screen break = 0xe0 0xf0 0x7c 0xe0 0xf0 0x12
+                    ; how to distinguish: 0xe1 is not used by anything other than pause
+                        ; pause pressed = 0xe1 0x14 0x77 0xe1 0xf0 0x14 0xf0 0x77
 
             ; this part can have interrupts since SPSC ring buffers
             ; are safe to use without locks, we still need them above
