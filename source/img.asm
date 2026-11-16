@@ -444,8 +444,7 @@ START_SECTION IMPL_TABLE
 
     ; main loop
     IMPL_PRIM KMAIN, 1
-        ; a simple superloop that calls all of the work handlers which have pending work,
-        ; currently this means it just prints the tick counter and received scancodes
+        ; a simple superloop that calls all of the work handlers which have pending work
 
         mov eax, [0x7c20]
         .main_loop:
@@ -512,10 +511,11 @@ START_SECTION IMPL_TABLE
     END_IMPL
 
     ; process scan code into key events and put them into the main keyboard consumer's ring buffer,
-    ; a key event in this system is an 8-bit integer consisting of a 7-bit keycode from 1 to 104 (0 is reserved),
+    ; a key event in this system is an 8-bit integer consisting of a 7-bit keycode from 1 to 127 (0 is reserved),
     ; and a top flag bit that is clear for key *presses* and set for key *releases*.
 
-    ; note that currently this is a placeholder implementation that simply prints and discards received scan codes
+    ; note that currently this is a placeholder implementation that simply prints the state after each code,
+    ; and does not actually write into the consumer's buffer
     IMPL_PRIM KEYBOARD_DRIVER, 1
         .dequeue:
             mov eax, [0x7c20]
@@ -534,27 +534,26 @@ START_SECTION IMPL_TABLE
                 je .end_dequeue
             sti
 
-            ; todo: make this actually emit key events
-                ; basic grammar
-                    ; <code> ::= byte
-                    ; <ext> ::= 0xe0
-                    ; <release> ::= 0xf0
-                    ; <key-press> ::= [ <ext> ] <code>
-                    ; <key-release> ::= [ <ext> ] <release> <code>
-                    ; <key> ::= <key-press> | <key-release>
+            ; basic grammar
+                ; <code> ::= byte
+                ; <ext> ::= 0xe0
+                ; <release> ::= 0xf0
+                ; <key-press> ::= [ <ext> ] <code>
+                ; <key-release> ::= [ <ext> ] <release> <code>
+                ; <key> ::= <key-press> | <key-release>
 
-                ; exceptions:
-                    ; print screen make = 0xe0 0x7c
-                    ; print screen break = 0xe0 0xf0 0x7c
-                    ; sysrq make = 0x84 | 0x7f (on some keyboards)
-                    ; sysrq break = 0xf0 0x84 | 0xf0 0x7f
-                    ; pause = 0xe1 0x14 0x77 0xe1 0xf0 0x14 0xf0 0x77 (after getting a 0xe1 byte we can just ignore the next 7 bytes since we know it'll be pause)
-                    ; "break" make = 0xe0 0xe7
-                    ; "break" break = 0xe0 0xf0 0xe7
-                    ; some keys will have fake pre- and suffixes of
-                    ; fake left or right shift key make and break sequences,
-                    ; they're easily spotted by the fact that they have a 0xe0
-                    ; where the real key does not, so they can be ignored
+            ; exceptions:
+                ; print screen make = 0xe0 0x7c
+                ; print screen break = 0xe0 0xf0 0x7c
+                ; sysrq make = 0x84 | 0x7f (on some keyboards)
+                ; sysrq break = 0xf0 0x84 | 0xf0 0x7f
+                ; pause = 0xe1 0x14 0x77 0xe1 0xf0 0x14 0xf0 0x77 (after getting a 0xe1 byte we can just ignore the next 7 bytes since we know it'll be pause)
+                ; "break" make = 0xe0 0xe7
+                ; "break" break = 0xe0 0xf0 0xe7
+                ; some keys will have fake pre- and suffixes of
+                ; fake left or right shift key make and break sequences,
+                ; they're easily spotted by the fact that they have a 0xe0
+                ; where the real key does not, so they can be ignored
 
             ; dequeue scancode into edx
             and ebx, 255
@@ -581,7 +580,7 @@ START_SECTION IMPL_TABLE
                 dd .case_neutral - .get_eip
                 dd .case_ext - .get_eip
                 dd .case_brk - .get_eip
-                dd .case_ext_brk - .get_eip
+                dd .case_extbrk - .get_eip
                 dd .case_pause1 - .get_eip
                 dd .case_pause2 - .get_eip
                 dd .case_pause3 - .get_eip
@@ -592,47 +591,132 @@ START_SECTION IMPL_TABLE
                 dd .case_err  - .get_eip
 
             .case_neutral:
+                cmp edx, 0xe1
+                je .case_neutral_pause
+                cmp edx, 0xe0
+                je .case_neutral_ext
+                cmp edx, 0xf0
+                je .case_neutral_brk
 
-                jmp .after_case
+                .case_neutral_make:
+                    ; todo: try to emit keycode
+                    jmp .after_case
+
+                .case_neutral_ext:
+                    mov byte [eax + (kbd_driver_state - GVCT_START)], KBD_DRVR_EXT
+                    jmp .after_case
+
+                .case_neutral_brk:
+                    mov byte [eax + (kbd_driver_state - GVCT_START)], KBD_DRVR_BRK
+                    jmp .after_case
+
+                .case_neutral_pause:
+                    mov byte [eax + (kbd_driver_state - GVCT_START)], KBD_DRVR_PAUSE1
+                    jmp .after_case
             .case_ext:
+                cmp edx, 0xf0
+                je .case_ext_brk
+                cmp edx, 0x12 ; fake left-shift
+                je .case_ext_fake
+                cmp edx, 0x59 ; fake right-shift
+                je .case_ext_fake
 
-                jmp .after_case
+                .case_ext_make:
+                    ; todo: try to emit keycode
+                    mov byte [eax + (kbd_driver_state - GVCT_START)], KBD_DRVR_NEUTRAL
+                    jmp .after_case
+
+                ; discard key
+                .case_ext_fake:
+                    mov byte [eax + (kbd_driver_state - GVCT_START)], KBD_DRVR_NEUTRAL
+                    jmp .after_case
+
+                .case_ext_brk:
+                    mov byte [eax + (kbd_driver_state - GVCT_START)], KBD_DRVR_EXT_BRK
+                    jmp .after_case
             .case_brk:
+                ; todo: try to emit keycode
 
+                mov byte [eax + (kbd_driver_state - GVCT_START)], KBD_DRVR_NEUTRAL
                 jmp .after_case
-            .case_ext_brk:
+            .case_extbrk:
+                cmp edx, 0x12
+                je .case_extbrk_fake
+                cmp edx, 0x59
+                je .case_extbrk_fake
 
-                jmp .after_case
+                .case_extbrk_make:
+                    ; todo: try to emit keycode
+                    mov byte [eax + (kbd_driver_state - GVCT_START)], KBD_DRVR_NEUTRAL
+                    jmp .after_case
+
+                ; fake left shift and right shift
+                .case_extbrk_fake:
+                    mov byte [eax + (kbd_driver_state - GVCT_START)], KBD_DRVR_NEUTRAL
+                    jmp .after_case
             .case_pause1:
+                cmp edx, 0x14
+                jne .case_err
 
-                jmp .after_case
+                .case_pause1_good:
+                    mov byte [eax + (kbd_driver_state - GVCT_START)], KBD_DRVR_PAUSE2
+                    jmp .after_case
             .case_pause2:
+                cmp edx, 0x77
+                jne .case_err
 
-                jmp .after_case
+                .case_pause2_good:
+                    mov byte [eax + (kbd_driver_state - GVCT_START)], KBD_DRVR_PAUSE3
+                    jmp .after_case
             .case_pause3:
+                cmp edx, 0xe1
+                jne .case_err
 
-                jmp .after_case
+                .case_pause3_good:
+                    mov byte [eax + (kbd_driver_state - GVCT_START)], KBD_DRVR_PAUSE4
+                    jmp .after_case
             .case_pause4:
+                cmp edx, 0xf0
+                jne .case_err
 
-                jmp .after_case
+                .case_pause4_good:
+                    mov byte [eax + (kbd_driver_state - GVCT_START)], KBD_DRVR_PAUSE5
+                    jmp .after_case
             .case_pause5:
+                cmp edx, 0x14
+                jne .case_err
 
-                jmp .after_case
+                .case_pause5_good:
+                    mov byte [eax + (kbd_driver_state - GVCT_START)], KBD_DRVR_PAUSE6
+                    jmp .after_case
             .case_pause6:
+                cmp edx, 0xf0
+                jne .case_err
 
-                jmp .after_case
+                .case_pause6_good:
+                    mov byte [eax + (kbd_driver_state - GVCT_START)], KBD_DRVR_PAUSE7
+                    jmp .after_case
             .case_pause7:
+                cmp edx, 0x77
+                jne .case_err
 
-                jmp .after_case
+                .case_pause7_good:
+                    mov byte [eax + (kbd_driver_state - GVCT_START)], KBD_DRVR_NEUTRAL
+                    jmp .after_case
             .case_err:
-
+                ; we set the state here since this branch doubles as both the error state,
+                ; and as the way of *entering* the error state
+                mov byte [eax + (kbd_driver_state - GVCT_START)], KBD_DRVR_ERR
                 jmp .after_case
 
             .after_case:
-            DPUSH edx
-            FCALL PUTH
+
+            movzx ebx, byte [eax + (kbd_driver_state - GVCT_START)]
             DPUSH 32
+            DPUSH ebx
+            FCALL PUTH
             FCALL PUTC
+
             jmp .dequeue
         .end_dequeue:
         and dword [eax + (pending_work - GVCT_START)], ~(1 << 1) ; clear pending work bit for IRQ 1
@@ -893,6 +977,14 @@ START_SECTION IMPL_TABLE
         mov word [eax + (console_cursor - GVCT_START)], bx
         mov byte [0xb8001 + ebx * 2], cl ; display cursor
 
+        ; initialize keycode buffer
+        mov byte [eax + (key_buf_error - GVCT_START)], 0
+        mov dword [eax + (key_buf_head - GVCT_START)], 0
+        mov dword [eax + (key_buf_tail - GVCT_START)], 0
+
+        ; mark the terminal as the keycode consumer
+        mov dword [eax + (kbd_driver_consumer - GVCT_START)], (key_buf - GVCT_START)
+        add dword [eax + (kbd_driver_consumer - GVCT_START)], eax
         ret
     END_IMPL
 
@@ -1488,6 +1580,8 @@ START_SECTION GVCT
     STOP_MAPPING
 
     ; key code state, for each key this can be 0 or 1 representing whether it's pressed
+    align 4, db 0
+    kbd_driver_consumer dd 0
     kbd_state:
     times 128 / 8 db 0
 
@@ -1504,6 +1598,13 @@ START_SECTION GVCT
     ; error code, 0 means fine and 1 means overflow,
     ; the rest are not currently used
     sccd_buf_error db 0
+
+    ; ring buffer used by the terminal for receiving keycodes from the keybord driver
+    align 4, db 0
+    key_buf times 256 db 0
+    key_buf_head dd 0
+    key_buf_tail dd 0
+    key_buf_error db 0
 
     HERE_START:
 END_SECTION
