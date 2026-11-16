@@ -342,7 +342,7 @@ org 0 ; not actually loaded at 0x00000000, but this gives us simple relative lab
 %define KBD_DRVR_PAUSE6 0x09
 %define KBD_DRVR_PAUSE7 0x0a ; skip one last byte and emit the pause keycode
 
-%define KBD_DRVR_ERR 0xff ; error state, we get here if either:
+%define KBD_DRVR_ERR 0x0b ; error state, we get here if either:
                           ; a) a keycode is about to be emitted for key 0 (unmapped key)
                           ; b) an unexpected byte is received during one of the PAUSE states
                           ; in this state all received bytes are discarded, key event consumers
@@ -556,13 +556,79 @@ START_SECTION IMPL_TABLE
                     ; they're easily spotted by the fact that they have a 0xe0
                     ; where the real key does not, so they can be ignored
 
-            ; this part can have interrupts since SPSC ring buffers
-            ; are safe to use without locks, we still need them above
-            ; though to avoid a lost wakeup problem
+            ; dequeue scancode into edx
             and ebx, 255
             movzx edx, byte [eax + (sccd_buf - GVCT_START) + ebx]
             inc dword [eax + (sccd_buf_tail - GVCT_START)]
 
+            ; dispatch to one of the cases based on the state
+            movzx ebx, byte [eax + (kbd_driver_state - GVCT_START)]
+
+            ; if invalid state, treat it as the error state
+            cmp ebx, 0x0b
+            ja .case_err
+
+            ; do a lil' switch statement here
+            call .get_eip
+            .get_eip:
+            pop ecx
+
+            add ecx, [ecx + (.jmp_table - .get_eip) + ebx*4] ; finally, add the offset of the case we branch to
+            jmp ecx
+
+            align 4
+            .jmp_table:
+                dd .case_neutral - .get_eip
+                dd .case_ext - .get_eip
+                dd .case_brk - .get_eip
+                dd .case_ext_brk - .get_eip
+                dd .case_pause1 - .get_eip
+                dd .case_pause2 - .get_eip
+                dd .case_pause3 - .get_eip
+                dd .case_pause4 - .get_eip
+                dd .case_pause5 - .get_eip
+                dd .case_pause6 - .get_eip
+                dd .case_pause7 - .get_eip
+                dd .case_err  - .get_eip
+
+            .case_neutral:
+
+                jmp .after_case
+            .case_ext:
+
+                jmp .after_case
+            .case_brk:
+
+                jmp .after_case
+            .case_ext_brk:
+
+                jmp .after_case
+            .case_pause1:
+
+                jmp .after_case
+            .case_pause2:
+
+                jmp .after_case
+            .case_pause3:
+
+                jmp .after_case
+            .case_pause4:
+
+                jmp .after_case
+            .case_pause5:
+
+                jmp .after_case
+            .case_pause6:
+
+                jmp .after_case
+            .case_pause7:
+
+                jmp .after_case
+            .case_err:
+
+                jmp .after_case
+
+            .after_case:
             DPUSH edx
             FCALL PUTH
             DPUSH 32
