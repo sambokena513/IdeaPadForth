@@ -256,6 +256,101 @@ org 0 ; not actually loaded at 0x00000000, but this gives us simple relative lab
 ; before concluding the ps/2 controller is bricked
 %define PS2_TIMEOUT 1000
 
+%macro PS2_WAIT_IBF 0 ; wait until a command is processed
+    %%wait:
+        in al, PS2_STATUS
+        test al, 1 << 1
+        jnz %%wait
+%endmacro
+
+%macro PS2_WAIT_OBF 0 ; wait until a response byte is available
+    %%wait:
+        in al, PS2_STATUS
+        test al, 1 << 0
+        jz %%wait
+%endmacro
+
+; send a byte to ps/2 keyboard and wait for ACK, resending if it is not received
+%macro PS2_KBD_COMMAND 1
+    mov edx, PS2_KBD_MAX_RETRIES
+    %%reset:
+    cmp edx, 0
+    je .panic
+    PS2_WAIT_IBF
+    mov al, %1
+    out PS2_DATA, al
+    %%response:
+    PS2_WAIT_OBF
+    in al, PS2_DATA
+    cmp al, PS2_KBD_ACK
+    je %%done
+    cmp al, PS2_KBD_RESEND
+    je %%resend
+        jmp %%response
+    %%resend:
+        dec edx
+        jmp %%reset
+    %%done:
+%endmacro
+
+; flush the output buffer
+%macro PS2_FLUSH_BUF 0
+    %%flush:
+        in al, PS2_STATUS
+        test al, 1 << 0
+        jz %%flushed
+
+        in al, PS2_DATA ; read and discard
+        jmp %%flush
+    %%flushed:
+%endmacro
+
+; macros for making sparse constant arrays, used for mapping scancodes to keycodes
+; start mapping indices in a sparse array to values
+%macro START_MAPPING 1
+    %push map_ctx
+    %$map:
+    %assign %$map_len %1
+%endmacro
+
+; stop mapping indices to values
+%macro STOP_MAPPING 0
+    times ((%$map + %$map_len) - $) db 0
+    %pop
+%endmacro
+
+; map a specific index in the current map to a value
+%macro MAP_IDX 2
+    times (%1 - ($ - %$map)) db 0
+    db %2
+%endmacro
+
+; keyboard driver states
+%define KBD_DRVR_NEUTRAL 0x00 ; default state, can move to EXT, BRK, or PAUSE1 from here depending on input
+%define KBD_DRVR_EXT 0x01 ; after receiving 0xe0 in NEUTRAL state, can move to EXT_BRK or back to NEUTRAL, emitting a key event
+%define KBD_DRVR_BRK 0x02 ; after receiving 0xf0 in NEUTRAL state, moves back to NEUTRAL and emits a key event
+%define KBD_DRVR_EXT_BRK 0x03 ; after receiving 0xf0 in EXT state, moves back to NEUTRAL and emits a key event
+                              ; note, if the received scancode is 0x12 or 0x59 we don't emit
+                              ; a key event
+
+; after receiving 0xe1, each of these states is another byte to skip,
+%define KBD_DRVR_PAUSE1 0x04
+%define KBD_DRVR_PAUSE2 0x05
+%define KBD_DRVR_PAUSE3 0x06
+%define KBD_DRVR_PAUSE4 0x07
+%define KBD_DRVR_PAUSE5 0x08
+%define KBD_DRVR_PAUSE6 0x09
+%define KBD_DRVR_PAUSE7 0x0a ; skip one last byte and emit the pause keycode
+
+%define KBD_DRVR_ERR 0xff ; error state, we get here if either:
+                          ; a) a keycode is about to be emitted for key 0 (unmapped key)
+                          ; b) an unexpected byte is received during one of the PAUSE states
+                          ; in this state all received bytes are discarded, key event consumers
+                          ; should check the driver state whenever the ring buffer is empty to decide
+                          ; whether to crash or to wait for more input, alternatively you can clear
+                          ; the scancode buffer and set this variable back to NEUTRAL to try to restart
+                          ; the driver
+
 ; ----
 ; CODE
 ; ----
@@ -449,12 +544,17 @@ START_SECTION IMPL_TABLE
                     ; <key> ::= <key-press> | <key-release>
 
                 ; exceptions:
-                    ; how to distinguish: no real key exists with the extended code 0x12,
-                    ; left shift does not have the 0xe0 prefix
-                        ; print screen make = 0xe0 0x12 0x30 0x7c
-                        ; print screen break = 0xe0 0xf0 0x7c 0xe0 0xf0 0x12
-                    ; how to distinguish: 0xe1 is not used by anything other than pause
-                        ; pause pressed = 0xe1 0x14 0x77 0xe1 0xf0 0x14 0xf0 0x77
+                    ; print screen make = 0xe0 0x7c
+                    ; print screen break = 0xe0 0xf0 0x7c
+                    ; sysrq make = 0x84 | 0x7f (on some keyboards)
+                    ; sysrq break = 0xf0 0x84 | 0xf0 0x7f
+                    ; pause = 0xe1 0x14 0x77 0xe1 0xf0 0x14 0xf0 0x77 (after getting a 0xe1 byte we can just ignore the next 7 bytes since we know it'll be pause)
+                    ; "break" make = 0xe0 0xe7
+                    ; "break" break = 0xe0 0xf0 0xe7
+                    ; some keys will have fake pre- and suffixes of
+                    ; fake left or right shift key make and break sequences,
+                    ; they're easily spotted by the fact that they have a 0xe0
+                    ; where the real key does not, so they can be ignored
 
             ; this part can have interrupts since SPSC ring buffers
             ; are safe to use without locks, we still need them above
@@ -936,55 +1036,6 @@ START_SECTION IMPL_TABLE
     ; actually has timeouts (based on that 18.2Hz timer) so it won't hang forever,
     ; also should push a success or error code instead of calling PANIC
     IMPL_PRIM KEYBOARD_INIT, 1
-        %macro PS2_WAIT_IBF 0 ; wait until a command is processed
-            %%wait:
-                in al, PS2_STATUS
-                test al, 1 << 1
-                jnz %%wait
-        %endmacro
-
-        %macro PS2_WAIT_OBF 0 ; wait until a response byte is available
-            %%wait:
-                in al, PS2_STATUS
-                test al, 1 << 0
-                jz %%wait
-        %endmacro
-
-        ; send a byte to ps/2 keyboard and wait for ACK, resending if it is not received
-        %macro PS2_KBD_COMMAND 1
-            mov edx, PS2_KBD_MAX_RETRIES
-            %%reset:
-            cmp edx, 0
-            je .panic
-            PS2_WAIT_IBF
-            mov al, %1
-            out PS2_DATA, al
-            %%response:
-            PS2_WAIT_OBF
-            in al, PS2_DATA
-            cmp al, PS2_KBD_ACK
-            je %%done
-            cmp al, PS2_KBD_RESEND
-            je %%resend
-                jmp %%response
-            %%resend:
-                dec edx
-                jmp %%reset
-            %%done:
-        %endmacro
-
-        ; flush the output buffer
-        %macro PS2_FLUSH_BUF 0
-            %%flush:
-                in al, PS2_STATUS
-                test al, 1 << 0
-                jz %%flushed
-
-                in al, PS2_DATA ; read and discard
-                jmp %%flush
-            %%flushed:
-        %endmacro
-
         ; disable scanning on keyboard first just in case, because
         ; in testing sometimes disabling the port itself is not enough,
         ; and we still get scan codes interfering with the controller self-test
@@ -1108,6 +1159,13 @@ START_SECTION IMPL_TABLE
         PS2_KBD_COMMAND PS2_KBD_SCANON
 
         PS2_WAIT_IBF ; don't return before the final command has been processed
+
+        ; initialize the actual keyboard driver
+        mov eax, [0x7c20]
+        mov byte [eax + (kbd_driver_state - GVCT_START)], 0
+        mov byte [eax + (sccd_buf_error)], 0
+        mov dword [eax + (sccd_buf_head - GVCT_START)], 0
+        mov dword [eax + (sccd_buf_tail - GVCT_START)], 0
         ret
 
         .panic:
@@ -1227,25 +1285,6 @@ START_SECTION GVCT
         dw 0 ; padding so that each entry becomes 8 bytes
     %endrep
     idet_end:
-
-    ; start mapping indices in a sparse array to values
-    %macro START_MAPPING 1
-        %push map_ctx
-        %$map:
-        %assign %$map_len %1
-    %endmacro
-
-    ; stop mapping indices to values
-    %macro STOP_MAPPING 0
-        times ((%$map + %$map_len) - $) db 0
-        %pop
-    %endmacro
-
-    ; map a specific index in the current map to a value
-    %macro MAP_IDX 2
-        times (%1 - ($ - %$map)) db 0
-        db %2
-    %endmacro
 
     ; maps scancode set 2 values to our internal 7-bit keycodes
     keycode_map:
@@ -1375,11 +1414,18 @@ START_SECTION GVCT
         MAP_IDX 0x75, 0x79 ; cursor up
         MAP_IDX 0x7A, 0x7a ; page down
         MAP_IDX 0x7D, 0x7b ; page up
+
+        ; print screen and pause are not here because they aren't produced through an array lookup,
+        ; but rather need special edge-case logic directly in the keyboard driver, however their values'd
+        ; be 0x7c and 0x7d respectively, and the special "break" key is 0x7e, and finally, 0x7f is reserved
+        ; separately from print-screen as SysRq.
     STOP_MAPPING
 
     ; key code state, for each key this can be 0 or 1 representing whether it's pressed
     kbd_state:
-    times 128 db 0
+    times 128 / 8 db 0
+
+    kbd_driver_state db 0
 
     ; ring buffer for keyboard scan codes, written to by IRQ 1
     ; about the implementation, we do the unsigned wraparound
