@@ -701,6 +701,8 @@ START_SECTION IMPL_TABLE
                 jne .case_err
 
                 .case_pause7_good:
+                    ; emit pause press and release event
+
                     mov byte [eax + (kbd_driver_state - GVCT_START)], KBD_DRVR_NEUTRAL
                     jmp .after_case
             .case_err:
@@ -1532,6 +1534,8 @@ START_SECTION GVCT
         MAP_IDX 0x7D, 0x53 ; (keypad) 9
         MAP_IDX 0x7E, 0x54 ; ScrollLock
         MAP_IDX 0x83, 0x55 ; F7
+        MAP_IDX 0x84, 0x7f ; sysrq (special)
+        MAP_IDX 0x7f, 0x7f ; alias for sysrq
     STOP_MAPPING
     START_MAPPING 256
         MAP_IDX 0x10, 0x56 ; (multimedia) WWW search
@@ -1571,12 +1575,17 @@ START_SECTION GVCT
         MAP_IDX 0x74, 0x78 ; cursor right
         MAP_IDX 0x75, 0x79 ; cursor up
         MAP_IDX 0x7A, 0x7a ; page down
+        MAP_IDX 0x7C, 0x7c ; print-screen (special)
         MAP_IDX 0x7D, 0x7b ; page up
+        MAP_IDX 0xE7, 0x7e ; break (special)
+        ; special key values:
+            ; - print screen = 0x7c
+            ; - pause = 0x7d
+            ; - break = 0x7e
+            ; - sysrq = 0x7f
 
-        ; print screen and pause are not here because they aren't produced through an array lookup,
-        ; but rather need special edge-case logic directly in the keyboard driver, however their values'd
-        ; be 0x7c and 0x7d respectively, and the special "break" key is 0x7e, and finally, 0x7f is reserved
-        ; separately from print-screen as SysRq.
+        ; note, pause isn't in this array because it isn't produced through a normal array lookup,
+        ; but rather has special edge-case logic directly in the driver
     STOP_MAPPING
 
     ; key code state, for each key this can be 0 or 1 representing whether it's pressed
