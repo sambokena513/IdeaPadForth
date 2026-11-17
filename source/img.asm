@@ -454,27 +454,23 @@ START_SECTION IMPL_TABLE
             ; interrupts disabled here so that the following can't happen:
                 ; IRQ 0 fires, we print the tick, IRQ 0 fires again, we don't notice and clear the flag
             cli
-            DPUSH eax
-            DPUSH ebx
-            DPUSH ecx
-            DPUSH edx
 
-            DPUSH dword [eax + (tkc_low - GVCT_START)]
-            DPUSH dword [eax + (tkc_high - GVCT_START)]
-            DPUSH 10
-            DPUSH 13
-            FCALL PUTC
-            FCALL PUTC
-            FCALL PUTH
-            FCALL PUTH
-
+            ; print current keyboard state
+            mov eax, [0x7c20]
             DPUSH 32
+            DPUSH dword [eax + (kbd_state - GVCT_START)]
+            DPUSH dword [eax + (kbd_state - GVCT_START) + 4]
+            DPUSH dword [eax + (kbd_state - GVCT_START) + 8]
+            DPUSH dword [eax + (kbd_state - GVCT_START) + 12]
+            DPUSH 13
+            DPUSH 10
             FCALL PUTC
-
-            DPOPR edx
-            DPOPR ecx
-            DPOPR ebx
-            DPOPR eax
+            FCALL PUTC
+            FCALL PUTH
+            FCALL PUTH
+            FCALL PUTH
+            FCALL PUTH
+            FCALL PUTC
 
             and dword [eax + (pending_work - GVCT_START)], ~(1 << 0)
             sti
@@ -543,22 +539,24 @@ START_SECTION IMPL_TABLE
                 ; <key> ::= <key-press> | <key-release>
 
             ; exceptions:
-                ; print screen make = 0xe0 0x7c
-                ; print screen break = 0xe0 0xf0 0x7c
-                ; sysrq make = 0x84 | 0x7f (on some keyboards)
-                ; sysrq break = 0xf0 0x84 | 0xf0 0x7f
-                ; pause = 0xe1 0x14 0x77 0xe1 0xf0 0x14 0xf0 0x77 (after getting a 0xe1 byte we can just ignore the next 7 bytes since we know it'll be pause)
-                ; "break" make = 0xe0 0xe7
-                ; "break" break = 0xe0 0xf0 0xe7
+                ; pause = 0xe1 0x14 0x77 0xe1 0xf0 0x14 0xf0 0x77
                 ; some keys will have fake pre- and suffixes of
                 ; fake left or right shift key make and break sequences,
                 ; they're easily spotted by the fact that they have a 0xe0
-                ; where the real key does not, so they can be ignored
+                ; where the real key does not, so they can be ignored and the real scancode
+                ; forwarded into the keycode table
 
             ; dequeue scancode into edx
             and ebx, 255
             movzx edx, byte [eax + (sccd_buf - GVCT_START) + ebx]
             inc dword [eax + (sccd_buf_tail - GVCT_START)]
+
+            pushad
+            DPUSH ':'
+            DPUSH edx
+            FCALL PUTH
+            FCALL PUTC
+            popad
 
             ; dispatch to one of the cases based on the state
             movzx ebx, byte [eax + (kbd_driver_state - GVCT_START)]
@@ -598,7 +596,14 @@ START_SECTION IMPL_TABLE
                 cmp edx, 0xf0
                 je .case_neutral_brk
 
-                .case_neutral_make:
+                .case_neutral_emit:
+                    movzx edx, byte [eax + (keycode_map - GVCT_START) + edx]
+                    test edx, edx
+                    jz .case_err
+
+                    ; alter keyboard state
+                    bts dword [eax + (kbd_state - GVCT_START)], edx
+
                     ; todo: try to emit keycode
                     jmp .after_case
 
@@ -617,17 +622,25 @@ START_SECTION IMPL_TABLE
                 cmp edx, 0xf0
                 je .case_ext_brk
                 cmp edx, 0x12 ; fake left-shift
-                je .case_ext_fake
+                je .case_ext_discard
                 cmp edx, 0x59 ; fake right-shift
-                je .case_ext_fake
+                je .case_ext_discard
 
-                .case_ext_make:
+                .case_ext_emit:
+                    ; edx = keycode, if we get 0 (meaning the key is unmapped) then we error
+                    movzx edx, byte [eax + (keycode_map - GVCT_START) + edx + 256]
+                    test edx, edx
+                    jz .case_err
+
+                    ; alter keyboard state
+                    bts dword [eax + (kbd_state - GVCT_START)], edx
+
                     ; todo: try to emit keycode
                     mov byte [eax + (kbd_driver_state - GVCT_START)], KBD_DRVR_NEUTRAL
                     jmp .after_case
 
                 ; discard key
-                .case_ext_fake:
+                .case_ext_discard:
                     mov byte [eax + (kbd_driver_state - GVCT_START)], KBD_DRVR_NEUTRAL
                     jmp .after_case
 
@@ -635,23 +648,37 @@ START_SECTION IMPL_TABLE
                     mov byte [eax + (kbd_driver_state - GVCT_START)], KBD_DRVR_EXT_BRK
                     jmp .after_case
             .case_brk:
-                ; todo: try to emit keycode
+                ; edx = keycode, if we get 0 (meaning the key is unmapped) then we error
+                movzx edx, byte [eax + (keycode_map - GVCT_START) + edx]
+                test edx, edx
+                jz .case_err
 
+                ; alter keyboard state
+                btr dword [eax + (kbd_state - GVCT_START)], edx
+
+                ; todo: try to emit keycode
                 mov byte [eax + (kbd_driver_state - GVCT_START)], KBD_DRVR_NEUTRAL
                 jmp .after_case
             .case_extbrk:
-                cmp edx, 0x12
-                je .case_extbrk_fake
-                cmp edx, 0x59
-                je .case_extbrk_fake
+                cmp edx, 0x12 ; fake left shift
+                je .case_extbrk_discard
+                cmp edx, 0x59 ; fake right shift
+                je .case_extbrk_discard
 
-                .case_extbrk_make:
+                .case_extbrk_emit:
+                    ; edx = keycode, if we get 0 (meaning the key is unmapped) then we error
+                    movzx edx, byte [eax + (keycode_map - GVCT_START) + edx + 256]
+                    test edx, edx
+                    jz .case_err
+
+                    ; alter keyboard state
+                    btr dword [eax + (kbd_state - GVCT_START)], edx
+
                     ; todo: try to emit keycode
                     mov byte [eax + (kbd_driver_state - GVCT_START)], KBD_DRVR_NEUTRAL
                     jmp .after_case
 
-                ; fake left shift and right shift
-                .case_extbrk_fake:
+                .case_extbrk_discard:
                     mov byte [eax + (kbd_driver_state - GVCT_START)], KBD_DRVR_NEUTRAL
                     jmp .after_case
             .case_pause1:
@@ -706,6 +733,7 @@ START_SECTION IMPL_TABLE
                     mov byte [eax + (kbd_driver_state - GVCT_START)], KBD_DRVR_NEUTRAL
                     jmp .after_case
             .case_err:
+                jmp $
                 ; we set the state here since this branch doubles as both the error state,
                 ; and as the way of *entering* the error state
                 mov byte [eax + (kbd_driver_state - GVCT_START)], KBD_DRVR_ERR
@@ -1323,7 +1351,7 @@ START_SECTION IMPL_TABLE
         ; initialize the actual keyboard driver
         mov eax, [0x7c20]
         mov byte [eax + (kbd_driver_state - GVCT_START)], 0
-        mov byte [eax + (sccd_buf_error)], 0
+        mov byte [eax + (sccd_buf_error - GVCT_START)], 0
         mov dword [eax + (sccd_buf_head - GVCT_START)], 0
         mov dword [eax + (sccd_buf_tail - GVCT_START)], 0
         ret
@@ -1450,6 +1478,7 @@ START_SECTION GVCT
     keycode_map:
     START_MAPPING 256
         MAP_IDX 0x01, 0x01 ; F9
+        MAP_IDX 0x02, 0x55 ; alias for F7 since some dipshit at intel decided to make their scancodes 7-bit only meaning I can't get 0x83
         MAP_IDX 0x03, 0x02 ; F5
         MAP_IDX 0x04, 0x03 ; F3
         MAP_IDX 0x05, 0x04 ; F1
@@ -1513,7 +1542,8 @@ START_SECTION GVCT
         MAP_IDX 0x59, 0x3e ; right shift
         MAP_IDX 0x5A, 0x3f ; enter
         MAP_IDX 0x5B, 0x40 ; ]
-        MAP_IDX 0x5D, 0x41 ; \
+        MAP_IDX 0x5D, 0x41 ; backslash
+        MAP_IDX 0x61, 0x41 ; ISO 102nd key gets mapped to backslash too (they do the basically the same thing anyway)
         MAP_IDX 0x66, 0x42 ; backspace
         MAP_IDX 0x69, 0x43 ; (keypad) 1
         MAP_IDX 0x6B, 0x44 ; (keypad) 4
@@ -1533,9 +1563,9 @@ START_SECTION GVCT
         MAP_IDX 0x7C, 0x52 ; (keypad) *
         MAP_IDX 0x7D, 0x53 ; (keypad) 9
         MAP_IDX 0x7E, 0x54 ; ScrollLock
+        MAP_IDX 0x7f, 0x7f ; alias for sysrq
         MAP_IDX 0x83, 0x55 ; F7
         MAP_IDX 0x84, 0x7f ; sysrq (special)
-        MAP_IDX 0x7f, 0x7f ; alias for sysrq
     STOP_MAPPING
     START_MAPPING 256
         MAP_IDX 0x10, 0x56 ; (multimedia) WWW search
@@ -1577,7 +1607,7 @@ START_SECTION GVCT
         MAP_IDX 0x7A, 0x7a ; page down
         MAP_IDX 0x7C, 0x7c ; print-screen (special)
         MAP_IDX 0x7D, 0x7b ; page up
-        MAP_IDX 0xE7, 0x7e ; break (special)
+        MAP_IDX 0x7E, 0x7e ; break (special)
         ; special key values:
             ; - print screen = 0x7c
             ; - pause = 0x7d
@@ -1592,7 +1622,7 @@ START_SECTION GVCT
     align 4, db 0
     kbd_driver_consumer dd 0
     kbd_state:
-    times 128 / 8 db 0
+    times 128 / 32 dd 0
 
     kbd_driver_state db 0
 
