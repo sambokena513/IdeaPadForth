@@ -873,7 +873,7 @@ START_SECTION IMPL_TABLE
                 jz .unmapped
 
                 ; echo key
-                DPUSH edx
+                DPUSH ebx
                 FCALL PUTC
 
                 ; todo: actually add the key to some form of line buffer
