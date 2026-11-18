@@ -451,29 +451,15 @@ START_SECTION IMPL_TABLE
             test dword [eax + (pending_work - GVCT_START)], 1 << 0
             jz .skip_0
 
-            ; interrupts disabled here so that the following can't happen:
-                ; IRQ 0 fires, we print the tick, IRQ 0 fires again, we don't notice and clear the flag
-            cli
-
-            ; print current keyboard state
-            mov eax, [0x7c20]
-            DPUSH 32
-            DPUSH dword [eax + (kbd_state - GVCT_START)]
-            DPUSH dword [eax + (kbd_state - GVCT_START) + 4]
-            DPUSH dword [eax + (kbd_state - GVCT_START) + 8]
-            DPUSH dword [eax + (kbd_state - GVCT_START) + 12]
-            DPUSH 13
-            DPUSH 10
-            FCALL PUTC
-            FCALL PUTC
-            FCALL PUTH
-            FCALL PUTH
-            FCALL PUTH
-            FCALL PUTH
-            FCALL PUTC
-
-            and dword [eax + (pending_work - GVCT_START)], ~(1 << 0)
-            sti
+            DPUSH eax
+            DPUSH ebx
+            DPUSH ecx
+            DPUSH edx
+            FCALL TIMER_HOOK
+            DPOPR edx
+            DPOPR ecx
+            DPOPR ebx
+            DPOPR eax
             .skip_0:
 
             test dword [eax + (pending_work - GVCT_START)], 1 << 1
@@ -510,7 +496,6 @@ START_SECTION IMPL_TABLE
             jne .work
 
             .no_work:
-            inc byte [0xb8000 + 79*2]
             sti
             hlt
             jmp .main_loop
@@ -518,6 +503,26 @@ START_SECTION IMPL_TABLE
             .work:
             sti
             jmp .main_loop
+    END_IMPL
+
+    ; timer hook, this function really just exists to reserve the wd idx,
+    ; so that users can replace it interactively to temporarily make something happen
+    ; on every timer tick, this implementation just increments the top-right of the screen,
+    ; serving as a kind of OS "heartbeat" so you know if it actually stalled or is just waiting
+    IMPL_PRIM TIMER_HOOK, 1
+        mov eax, [0x7c20]
+        .loop:
+            cli
+                test dword [eax + (pending_work - GVCT_START)], 1 << 0
+                jz .end
+            sti
+
+            inc word [0xb8000 + 79*2]
+            and dword [eax + (pending_work - GVCT_START)], ~(1 << 0)
+            jmp .loop
+        .end:
+        sti
+        ret
     END_IMPL
 
     ; process scan code into key events and put them into the main keyboard consumer's ring buffer,
@@ -561,13 +566,6 @@ START_SECTION IMPL_TABLE
             and ebx, 255
             movzx edx, byte [eax + (sccd_buf - GVCT_START) + ebx]
             inc dword [eax + (sccd_buf_tail - GVCT_START)]
-
-            pushad
-            DPUSH ':'
-            DPUSH edx
-            FCALL PUTH
-            FCALL PUTC
-            popad
 
             ; dispatch to one of the cases based on the state
             movzx ebx, byte [eax + (kbd_driver_state - GVCT_START)]
@@ -616,19 +614,19 @@ START_SECTION IMPL_TABLE
                     bts dword [eax + (kbd_state - GVCT_START)], edx
 
                     call near .emit_keycode
-                    jmp .after_case
+                    jmp .dequeue
 
                 .case_neutral_ext:
                     mov byte [eax + (kbd_driver_state - GVCT_START)], KBD_DRVR_EXT
-                    jmp .after_case
+                    jmp .dequeue
 
                 .case_neutral_brk:
                     mov byte [eax + (kbd_driver_state - GVCT_START)], KBD_DRVR_BRK
-                    jmp .after_case
+                    jmp .dequeue
 
                 .case_neutral_pause:
                     mov byte [eax + (kbd_driver_state - GVCT_START)], KBD_DRVR_PAUSE1
-                    jmp .after_case
+                    jmp .dequeue
             .case_ext:
                 cmp edx, 0xf0
                 je .case_ext_brk
@@ -648,16 +646,16 @@ START_SECTION IMPL_TABLE
 
                     call near .emit_keycode
                     mov byte [eax + (kbd_driver_state - GVCT_START)], KBD_DRVR_NEUTRAL
-                    jmp .after_case
+                    jmp .dequeue
 
                 ; discard key
                 .case_ext_discard:
                     mov byte [eax + (kbd_driver_state - GVCT_START)], KBD_DRVR_NEUTRAL
-                    jmp .after_case
+                    jmp .dequeue
 
                 .case_ext_brk:
                     mov byte [eax + (kbd_driver_state - GVCT_START)], KBD_DRVR_EXT_BRK
-                    jmp .after_case
+                    jmp .dequeue
             .case_brk:
                 ; edx = keycode, if we get 0 (meaning the key is unmapped) then we error
                 movzx edx, byte [eax + (keycode_map - GVCT_START) + edx]
@@ -670,7 +668,7 @@ START_SECTION IMPL_TABLE
                 or edx, 1 << 7 ; mark as key release
                 call near .emit_keycode
                 mov byte [eax + (kbd_driver_state - GVCT_START)], KBD_DRVR_NEUTRAL
-                jmp .after_case
+                jmp .dequeue
             .case_extbrk:
                 cmp edx, 0x12 ; fake left shift
                 je .case_extbrk_discard
@@ -689,53 +687,53 @@ START_SECTION IMPL_TABLE
                     or edx, 1 << 7 ; mark as key release
                     call near .emit_keycode
                     mov byte [eax + (kbd_driver_state - GVCT_START)], KBD_DRVR_NEUTRAL
-                    jmp .after_case
+                    jmp .dequeue
 
                 .case_extbrk_discard:
                     mov byte [eax + (kbd_driver_state - GVCT_START)], KBD_DRVR_NEUTRAL
-                    jmp .after_case
+                    jmp .dequeue
             .case_pause1:
                 cmp edx, 0x14
                 jne .case_err
 
                 .case_pause1_good:
                     mov byte [eax + (kbd_driver_state - GVCT_START)], KBD_DRVR_PAUSE2
-                    jmp .after_case
+                    jmp .dequeue
             .case_pause2:
                 cmp edx, 0x77
                 jne .case_err
 
                 .case_pause2_good:
                     mov byte [eax + (kbd_driver_state - GVCT_START)], KBD_DRVR_PAUSE3
-                    jmp .after_case
+                    jmp .dequeue
             .case_pause3:
                 cmp edx, 0xe1
                 jne .case_err
 
                 .case_pause3_good:
                     mov byte [eax + (kbd_driver_state - GVCT_START)], KBD_DRVR_PAUSE4
-                    jmp .after_case
+                    jmp .dequeue
             .case_pause4:
                 cmp edx, 0xf0
                 jne .case_err
 
                 .case_pause4_good:
                     mov byte [eax + (kbd_driver_state - GVCT_START)], KBD_DRVR_PAUSE5
-                    jmp .after_case
+                    jmp .dequeue
             .case_pause5:
                 cmp edx, 0x14
                 jne .case_err
 
                 .case_pause5_good:
                     mov byte [eax + (kbd_driver_state - GVCT_START)], KBD_DRVR_PAUSE6
-                    jmp .after_case
+                    jmp .dequeue
             .case_pause6:
                 cmp edx, 0xf0
                 jne .case_err
 
                 .case_pause6_good:
                     mov byte [eax + (kbd_driver_state - GVCT_START)], KBD_DRVR_PAUSE7
-                    jmp .after_case
+                    jmp .dequeue
             .case_pause7:
                 cmp edx, 0x77
                 jne .case_err
@@ -748,22 +746,17 @@ START_SECTION IMPL_TABLE
                     call near .emit_keycode
 
                     mov byte [eax + (kbd_driver_state - GVCT_START)], KBD_DRVR_NEUTRAL
-                    jmp .after_case
+                    jmp .dequeue
             .case_err:
                 ; we set the state here since this branch doubles as both the error state,
                 ; and as the way of *entering* the error state
                 mov byte [eax + (kbd_driver_state - GVCT_START)], KBD_DRVR_ERR
-                jmp .after_case
 
-            .after_case:
-
-            movzx ebx, byte [eax + (kbd_driver_state - GVCT_START)]
-            DPUSH 32
-            DPUSH ebx
-            FCALL PUTH
-            FCALL PUTC
-
-            jmp .dequeue
+                ; the keyboard consumer should be aware that the driver has crashed,
+                ; so we make it runnable
+                movzx ebx, byte [eax + (kbd_driver_consumer_task - GVCT_START)]
+                bts dword [eax + (pending_work - GVCT_START)], ebx
+                jmp .dequeue
         .end_dequeue:
         and dword [eax + (pending_work - GVCT_START)], ~(1 << 1) ; clear pending work bit for IRQ 1
         sti
@@ -836,17 +829,63 @@ START_SECTION IMPL_TABLE
             jmp .end
             .dequeue:
 
+            ; dequeue keycode into ebx
             and ebx, 0xff
             movzx ebx, byte [eax + (key_buf - GVCT_START) + ebx]
             inc dword [eax + (key_buf_tail - GVCT_START)]
 
-            ; placeholder
-            DPUSH 32
-            DPUSH ebx
-            FCALL PUTH
-            FCALL PUTC
+            ; ignore key release events
+            test ebx, (1 << 7)
+            jnz .loop
 
-            jmp .loop
+            ; check if shift and/or altgr are pressed
+            test dword [eax + (kbd_state - GVCT_START) + (0x0e / 32)], 1 << (0x0e % 32) ; left shift
+            setnz cl
+            test dword [eax + (kbd_state - GVCT_START) + (0x57 / 32)], 1 << (0x57 % 32) ; right alt
+            setnz ch
+
+            cmp cx, (1 << 0 | 1 << 8)
+            je .shift_alt
+            cmp cx, (1 << 8)
+            je .alt
+            cmp cx, (1 << 0)
+            je .shift
+
+            ; depending on modifier keys, index table differently
+            .normal:
+                movzx ebx, byte [eax + (char_map - GVCT_START) + ebx]
+                jmp .handle_key
+
+            .shift_alt:
+                movzx ebx, byte [eax + (char_map - GVCT_START) + ebx + 3]
+                jmp .handle_key
+
+            .alt:
+                movzx ebx, byte [eax + (char_map - GVCT_START) + ebx + 2]
+                jmp .handle_key
+
+            .shift:
+                movzx ebx, byte [eax + (char_map - GVCT_START) + ebx + 1]
+                jmp .handle_key
+
+            .handle_key:
+                test ebx, ebx
+                jz .unmapped
+
+                ; echo key
+                DPUSH edx
+                FCALL PUTC
+
+                ; todo: actually add the key to some form of line buffer
+                jmp .loop
+
+            ; handle unmapped key, for this we just print '^?' to the screen
+            .unmapped:
+                DPUSH '?'
+                DPUSH '^'
+                FCALL PUTC
+                FCALL PUTC
+                jmp .loop
         .end:
         and dword [eax + (pending_work - GVCT_START)], ~(1 << 2) ; clear pending work for terminal
         ret
@@ -1198,6 +1237,8 @@ START_SECTION IMPL_TABLE
 
     ; print a character to the console
     IMPL_PRIM PUTC, 1
+        ; TODO, rework this to be a little less disgusting, and to add \b support
+
         mov eax, [0x7c20]
 
         ; no need to scroll for carriage return, it doesn't move the cursor forward
@@ -1471,6 +1512,7 @@ END_SECTION
 START_SECTION WD_TABLE
     WORD_DESC INIT, 0
     WORD_DESC KMAIN, 0
+    WORD_DESC TIMER_HOOK, 0
     WORD_DESC KEYBOARD_DRIVER, 0
     WORD_DESC TERMINAL_DRIVER, 0
     WORD_DESC PANIC, 0
@@ -1491,6 +1533,7 @@ END_SECTION
 START_SECTION DICT
     DICT_ENTRY INIT, "INIT"
     DICT_ENTRY KMAIN, "KMAIN"
+    DICT_ENTRY TIMER_HOOK, "TIMER_HOOK"
     DICT_ENTRY KEYBOARD_DRIVER, "KEYBOARD_DRIVER"
     DICT_ENTRY TERMINAL_DRIVER, "TERMINAL_DRIVER"
     DICT_ENTRY PANIC, "PANIC"
@@ -1723,6 +1766,14 @@ START_SECTION GVCT
         ; note, pause isn't in this array because it isn't produced through a normal array lookup,
         ; but rather has special edge-case logic directly in the driver
     STOP_MAPPING
+
+    ; character map for terminal (to map keycodes to ascii characters)
+    align 4, db 0
+    char_map:
+    ; todo: fill this out, prolly with an awk script or smth
+    ; to parse the idx mappings and give me at least the first of the 4 characters for
+    ; each of these entries
+    times 128 dd 0
 
     ; key code state, for each key this can be 0 or 1 representing whether it's pressed
     align 4, db 0
