@@ -853,19 +853,19 @@ START_SECTION IMPL_TABLE
 
             ; depending on modifier keys, index table differently
             .normal:
-                movzx ebx, byte [eax + (char_map - GVCT_START) + ebx]
+                movzx ebx, byte [eax + (char_map - GVCT_START) + ebx*4]
                 jmp .handle_key
 
             .shift_alt:
-                movzx ebx, byte [eax + (char_map - GVCT_START) + ebx + 3]
+                movzx ebx, byte [eax + (char_map - GVCT_START) + ebx*4 + 3]
                 jmp .handle_key
 
             .alt:
-                movzx ebx, byte [eax + (char_map - GVCT_START) + ebx + 2]
+                movzx ebx, byte [eax + (char_map - GVCT_START) + ebx*4 + 2]
                 jmp .handle_key
 
             .shift:
-                movzx ebx, byte [eax + (char_map - GVCT_START) + ebx + 1]
+                movzx ebx, byte [eax + (char_map - GVCT_START) + ebx*4 + 1]
                 jmp .handle_key
 
             .handle_key:
