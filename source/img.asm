@@ -490,6 +490,20 @@ START_SECTION IMPL_TABLE
             DPOPR eax
             .skip_1:
 
+            test dword [eax + (pending_work - GVCT_START)], 1 << 2
+            jz .skip_2
+
+            DPUSH eax
+            DPUSH ebx
+            DPUSH ecx
+            DPUSH edx
+            FCALL TERMINAL_DRIVER
+            DPOPR edx
+            DPOPR ecx
+            DPOPR ebx
+            DPOPR eax
+            .skip_2:
+
             .end:
             cli
             cmp dword [eax + (pending_work - GVCT_START)], 0
@@ -509,9 +523,6 @@ START_SECTION IMPL_TABLE
     ; process scan code into key events and put them into the main keyboard consumer's ring buffer,
     ; a key event in this system is an 8-bit integer consisting of a 7-bit keycode from 1 to 127 (0 is reserved),
     ; and a top flag bit that is clear for key *presses* and set for key *releases*.
-
-    ; note that currently this is a placeholder implementation that simply prints the state after each code,
-    ; and does not actually write into the consumer's buffer
     IMPL_PRIM KEYBOARD_DRIVER, 1
         .dequeue:
             mov eax, [0x7c20]
@@ -604,7 +615,7 @@ START_SECTION IMPL_TABLE
                     ; alter keyboard state
                     bts dword [eax + (kbd_state - GVCT_START)], edx
 
-                    ; todo: try to emit keycode
+                    call near .emit_keycode
                     jmp .after_case
 
                 .case_neutral_ext:
@@ -635,7 +646,7 @@ START_SECTION IMPL_TABLE
                     ; alter keyboard state
                     bts dword [eax + (kbd_state - GVCT_START)], edx
 
-                    ; todo: try to emit keycode
+                    call near .emit_keycode
                     mov byte [eax + (kbd_driver_state - GVCT_START)], KBD_DRVR_NEUTRAL
                     jmp .after_case
 
@@ -656,7 +667,8 @@ START_SECTION IMPL_TABLE
                 ; alter keyboard state
                 btr dword [eax + (kbd_state - GVCT_START)], edx
 
-                ; todo: try to emit keycode
+                or edx, 1 << 7 ; mark as key release
+                call near .emit_keycode
                 mov byte [eax + (kbd_driver_state - GVCT_START)], KBD_DRVR_NEUTRAL
                 jmp .after_case
             .case_extbrk:
@@ -674,7 +686,8 @@ START_SECTION IMPL_TABLE
                     ; alter keyboard state
                     btr dword [eax + (kbd_state - GVCT_START)], edx
 
-                    ; todo: try to emit keycode
+                    or edx, 1 << 7 ; mark as key release
+                    call near .emit_keycode
                     mov byte [eax + (kbd_driver_state - GVCT_START)], KBD_DRVR_NEUTRAL
                     jmp .after_case
 
@@ -733,7 +746,6 @@ START_SECTION IMPL_TABLE
                     mov byte [eax + (kbd_driver_state - GVCT_START)], KBD_DRVR_NEUTRAL
                     jmp .after_case
             .case_err:
-                jmp $
                 ; we set the state here since this branch doubles as both the error state,
                 ; and as the way of *entering* the error state
                 mov byte [eax + (kbd_driver_state - GVCT_START)], KBD_DRVR_ERR
@@ -751,6 +763,88 @@ START_SECTION IMPL_TABLE
         .end_dequeue:
         and dword [eax + (pending_work - GVCT_START)], ~(1 << 1) ; clear pending work bit for IRQ 1
         sti
+        ret
+
+        ; small helper for emitting a keycode, assumes edx = keycode and eax = GVCT_START
+        .emit_keycode:
+            movzx ebx, byte [eax + (kbd_driver_consumer_task - GVCT_START)]
+            bts dword [eax + (pending_work - GVCT_START)], ebx
+
+            ; if there's already an error don't enqueue more
+            mov ebx, dword [eax + (kbd_driver_consumer - GVCT_START)]
+            cmp byte [ebx + 256 + 8], 0
+            jne .emit_keycode_end
+
+            ; check for overflow
+            mov ecx, [ebx + 256]
+            sub ecx, [ebx + 256 + 4]
+            cmp ecx, 256
+            je .emit_keycode_overflow
+
+            ; enqueue keycode from dl
+            mov ecx, [ebx + 256]
+            and ecx, 255
+            mov byte [ebx + ecx], dl
+            inc dword [ebx + 256]
+
+            .emit_keycode_end:
+            ret
+
+            .emit_keycode_overflow:
+            mov byte [ebx + 256 + 8], 1
+            ret
+    END_IMPL
+
+    ; consume keycodes from the keyboard driver,
+    ; decode into ascii characters, and echo them
+    ; (temporary, in the future this should also fill up a line buffer,
+    ; and the echo functionality should be optional)
+    IMPL_PRIM TERMINAL_DRIVER, 1
+        .loop:
+            mov eax, [0x7c20]
+
+            ; the only error for this is overflow, and we're fine with dropping
+            ; characters if we get called too infrequently, so we'll just clear
+            ; the error byte and continue
+            mov byte [eax + (key_buf_error - GVCT_START)], 0
+
+            ; check if we can dequeue
+            mov ebx, [eax + (key_buf_tail - GVCT_START)]
+            cmp ebx, [eax + (key_buf_head - GVCT_START)]
+            jne .dequeue
+
+            ; if the buffer is empty, check if the driver is running
+            cmp byte [eax + (kbd_driver_state - GVCT_START)], KBD_DRVR_ERR
+            jne .end
+            ; reset driver state on error
+            mov byte [eax + (kbd_driver_state - GVCT_START)], KBD_DRVR_NEUTRAL
+            ; clear scancode buf
+            cli
+            mov byte [eax + (sccd_buf_error - GVCT_START)], 0
+            mov dword [eax + (sccd_buf_tail - GVCT_START)], 0
+            mov dword [eax + (sccd_buf_head - GVCT_START)], 0
+            sti
+            ; reset keyboard state
+            mov dword [eax + (kbd_state - GVCT_START)], 0
+            mov dword [eax + (kbd_state - GVCT_START) + 4], 0
+            mov dword [eax + (kbd_state - GVCT_START) + 8], 0
+            mov dword [eax + (kbd_state - GVCT_START) + 12], 0
+            jmp .end
+            .dequeue:
+
+            and ebx, 0xff
+            movzx ebx, byte [eax + (key_buf - GVCT_START) + ebx]
+            inc dword [eax + (key_buf_tail - GVCT_START)]
+
+            ; placeholder
+            DPUSH 32
+            DPUSH ebx
+            FCALL PUTH
+            FCALL PUTC
+
+            jmp .loop
+        .end:
+        and dword [eax + (pending_work - GVCT_START)], ~(1 << 2) ; clear pending work for terminal
         ret
     END_IMPL
 
@@ -1015,6 +1109,7 @@ START_SECTION IMPL_TABLE
         ; mark the terminal as the keycode consumer
         mov dword [eax + (kbd_driver_consumer - GVCT_START)], (key_buf - GVCT_START)
         add dword [eax + (kbd_driver_consumer - GVCT_START)], eax
+        mov byte [eax + (kbd_driver_consumer_task - GVCT_START)], 2
         ret
     END_IMPL
 
@@ -1354,6 +1449,11 @@ START_SECTION IMPL_TABLE
         mov byte [eax + (sccd_buf_error - GVCT_START)], 0
         mov dword [eax + (sccd_buf_head - GVCT_START)], 0
         mov dword [eax + (sccd_buf_tail - GVCT_START)], 0
+
+        mov dword [eax + (kbd_state - GVCT_START)], 0
+        mov dword [eax + (kbd_state - GVCT_START) + 4], 0
+        mov dword [eax + (kbd_state - GVCT_START) + 8], 0
+        mov dword [eax + (kbd_state - GVCT_START) + 12], 0
         ret
 
         .panic:
@@ -1368,6 +1468,7 @@ START_SECTION WD_TABLE
     WORD_DESC INIT, 0
     WORD_DESC KMAIN, 0
     WORD_DESC KEYBOARD_DRIVER, 0
+    WORD_DESC TERMINAL_DRIVER, 0
     WORD_DESC PANIC, 0
     WORD_DESC INT_INIT, 0
     WORD_DESC SET_INT, 0
@@ -1387,6 +1488,7 @@ START_SECTION DICT
     DICT_ENTRY INIT, "INIT"
     DICT_ENTRY KMAIN, "KMAIN"
     DICT_ENTRY KEYBOARD_DRIVER, "KEYBOARD_DRIVER"
+    DICT_ENTRY TERMINAL_DRIVER, "TERMINAL_DRIVER"
     DICT_ENTRY PANIC, "PANIC"
     DICT_ENTRY INT_INIT, "INT_INIT"
     DICT_ENTRY SET_INT, "SET_INT"
@@ -1620,10 +1722,11 @@ START_SECTION GVCT
 
     ; key code state, for each key this can be 0 or 1 representing whether it's pressed
     align 4, db 0
-    kbd_driver_consumer dd 0
+    kbd_driver_consumer dd 0 ; addr of ring buf to send keycodes to
     kbd_state:
     times 128 / 32 dd 0
 
+    kbd_driver_consumer_task db 0 ; bit index in pending_work of the task to make runnable
     kbd_driver_state db 0
 
     ; ring buffer for keyboard scan codes, written to by IRQ 1
