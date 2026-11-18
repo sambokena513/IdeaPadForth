@@ -742,6 +742,10 @@ START_SECTION IMPL_TABLE
 
                 .case_pause7_good:
                     ; emit pause press and release event
+                    mov edx, 0x7d
+                    call near .emit_keycode
+                    mov edx, 0x7d | (1 << 7)
+                    call near .emit_keycode
 
                     mov byte [eax + (kbd_driver_state - GVCT_START)], KBD_DRVR_NEUTRAL
                     jmp .after_case
