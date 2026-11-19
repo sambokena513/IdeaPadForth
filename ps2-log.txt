@@ -1,0 +1,316 @@
+pckbd_kbd_read_data 0x55
+pckbd_kbd_read_data 0x00
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0xfa
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0xaa
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0xfa
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0xfa
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0xfa
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0xfa
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0xfa
+pckbd_kbd_read_data 0x71
+pckbd_kbd_read_data 0x55
+pckbd_kbd_read_data 0x00
+pckbd_kbd_read_data 0x21
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0xfa
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0xaa
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0xfa
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0xfa
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0xfa
+ps2_keyboard_event 0x5651993d68f8 lnx 2 down 1 modifier 0x0 modifiers 0x0 set 2 xlate 0
+ps2_put_keycode 0x5651993d68f8 keycode 0x16
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0x16
+ps2_keyboard_event 0x5651993d68f8 lnx 3 down 1 modifier 0x0 modifiers 0x0 set 2 xlate 0
+ps2_put_keycode 0x5651993d68f8 keycode 0x1e
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0x1e
+ps2_keyboard_event 0x5651993d68f8 lnx 2 down 0 modifier 0x0 modifiers 0x0 set 2 xlate 0
+ps2_put_keycode 0x5651993d68f8 keycode 0xf0
+ps2_put_keycode 0x5651993d68f8 keycode 0x16
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0xf0
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0x16
+ps2_keyboard_event 0x5651993d68f8 lnx 3 down 0 modifier 0x0 modifiers 0x0 set 2 xlate 0
+ps2_put_keycode 0x5651993d68f8 keycode 0xf0
+ps2_put_keycode 0x5651993d68f8 keycode 0x1e
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0xf0
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0x1e
+ps2_keyboard_event 0x5651993d68f8 lnx 4 down 1 modifier 0x0 modifiers 0x0 set 2 xlate 0
+ps2_put_keycode 0x5651993d68f8 keycode 0x26
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0x26
+ps2_keyboard_event 0x5651993d68f8 lnx 4 down 0 modifier 0x0 modifiers 0x0 set 2 xlate 0
+ps2_put_keycode 0x5651993d68f8 keycode 0xf0
+ps2_put_keycode 0x5651993d68f8 keycode 0x26
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0xf0
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0x26
+ps2_keyboard_event 0x5651993d68f8 lnx 5 down 1 modifier 0x0 modifiers 0x0 set 2 xlate 0
+ps2_put_keycode 0x5651993d68f8 keycode 0x25
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0x25
+ps2_keyboard_event 0x5651993d68f8 lnx 5 down 0 modifier 0x0 modifiers 0x0 set 2 xlate 0
+ps2_put_keycode 0x5651993d68f8 keycode 0xf0
+ps2_put_keycode 0x5651993d68f8 keycode 0x25
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0xf0
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0x25
+ps2_keyboard_event 0x5651993d68f8 lnx 6 down 1 modifier 0x0 modifiers 0x0 set 2 xlate 0
+ps2_put_keycode 0x5651993d68f8 keycode 0x2e
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0x2e
+ps2_keyboard_event 0x5651993d68f8 lnx 6 down 0 modifier 0x0 modifiers 0x0 set 2 xlate 0
+ps2_put_keycode 0x5651993d68f8 keycode 0xf0
+ps2_put_keycode 0x5651993d68f8 keycode 0x2e
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0xf0
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0x2e
+ps2_keyboard_event 0x5651993d68f8 lnx 7 down 1 modifier 0x0 modifiers 0x0 set 2 xlate 0
+ps2_put_keycode 0x5651993d68f8 keycode 0x36
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0x36
+ps2_keyboard_event 0x5651993d68f8 lnx 7 down 0 modifier 0x0 modifiers 0x0 set 2 xlate 0
+ps2_put_keycode 0x5651993d68f8 keycode 0xf0
+ps2_put_keycode 0x5651993d68f8 keycode 0x36
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0xf0
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0x36
+ps2_keyboard_event 0x5651993d68f8 lnx 8 down 1 modifier 0x0 modifiers 0x0 set 2 xlate 0
+ps2_put_keycode 0x5651993d68f8 keycode 0x3d
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0x3d
+ps2_keyboard_event 0x5651993d68f8 lnx 8 down 0 modifier 0x0 modifiers 0x0 set 2 xlate 0
+ps2_put_keycode 0x5651993d68f8 keycode 0xf0
+ps2_put_keycode 0x5651993d68f8 keycode 0x3d
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0xf0
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0x3d
+ps2_keyboard_event 0x5651993d68f8 lnx 9 down 1 modifier 0x0 modifiers 0x0 set 2 xlate 0
+ps2_put_keycode 0x5651993d68f8 keycode 0x3e
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0x3e
+ps2_keyboard_event 0x5651993d68f8 lnx 9 down 0 modifier 0x0 modifiers 0x0 set 2 xlate 0
+ps2_put_keycode 0x5651993d68f8 keycode 0xf0
+ps2_put_keycode 0x5651993d68f8 keycode 0x3e
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0xf0
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0x3e
+ps2_keyboard_event 0x5651993d68f8 lnx 10 down 1 modifier 0x0 modifiers 0x0 set 2 xlate 0
+ps2_put_keycode 0x5651993d68f8 keycode 0x46
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0x46
+ps2_keyboard_event 0x5651993d68f8 lnx 10 down 0 modifier 0x0 modifiers 0x0 set 2 xlate 0
+ps2_put_keycode 0x5651993d68f8 keycode 0xf0
+ps2_put_keycode 0x5651993d68f8 keycode 0x46
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0xf0
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0x46
+ps2_keyboard_event 0x5651993d68f8 lnx 2 down 1 modifier 0x0 modifiers 0x0 set 2 xlate 0
+ps2_put_keycode 0x5651993d68f8 keycode 0x16
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0x16
+ps2_keyboard_event 0x5651993d68f8 lnx 2 down 0 modifier 0x0 modifiers 0x0 set 2 xlate 0
+ps2_put_keycode 0x5651993d68f8 keycode 0xf0
+ps2_put_keycode 0x5651993d68f8 keycode 0x16
+ps2_keyboard_event 0x5651993d68f8 lnx 3 down 1 modifier 0x0 modifiers 0x0 set 2 xlate 0
+ps2_put_keycode 0x5651993d68f8 keycode 0x1e
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0xf0
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0x16
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0x1e
+ps2_keyboard_event 0x5651993d68f8 lnx 4 down 1 modifier 0x0 modifiers 0x0 set 2 xlate 0
+ps2_put_keycode 0x5651993d68f8 keycode 0x26
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0x26
+ps2_keyboard_event 0x5651993d68f8 lnx 3 down 0 modifier 0x0 modifiers 0x0 set 2 xlate 0
+ps2_put_keycode 0x5651993d68f8 keycode 0xf0
+ps2_put_keycode 0x5651993d68f8 keycode 0x1e
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0xf0
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0x1e
+ps2_keyboard_event 0x5651993d68f8 lnx 4 down 0 modifier 0x0 modifiers 0x0 set 2 xlate 0
+ps2_put_keycode 0x5651993d68f8 keycode 0xf0
+ps2_put_keycode 0x5651993d68f8 keycode 0x26
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0xf0
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0x26
+ps2_keyboard_event 0x5651993d68f8 lnx 5 down 1 modifier 0x0 modifiers 0x0 set 2 xlate 0
+ps2_put_keycode 0x5651993d68f8 keycode 0x25
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0x25
+ps2_keyboard_event 0x5651993d68f8 lnx 5 down 0 modifier 0x0 modifiers 0x0 set 2 xlate 0
+ps2_put_keycode 0x5651993d68f8 keycode 0xf0
+ps2_put_keycode 0x5651993d68f8 keycode 0x25
+ps2_keyboard_event 0x5651993d68f8 lnx 6 down 1 modifier 0x0 modifiers 0x0 set 2 xlate 0
+ps2_put_keycode 0x5651993d68f8 keycode 0x2e
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0xf0
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0x25
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0x2e
+ps2_keyboard_event 0x5651993d68f8 lnx 6 down 0 modifier 0x0 modifiers 0x0 set 2 xlate 0
+ps2_put_keycode 0x5651993d68f8 keycode 0xf0
+ps2_put_keycode 0x5651993d68f8 keycode 0x2e
+ps2_keyboard_event 0x5651993d68f8 lnx 7 down 1 modifier 0x0 modifiers 0x0 set 2 xlate 0
+ps2_put_keycode 0x5651993d68f8 keycode 0x36
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0xf0
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0x2e
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0x36
+ps2_keyboard_event 0x5651993d68f8 lnx 7 down 0 modifier 0x0 modifiers 0x0 set 2 xlate 0
+ps2_put_keycode 0x5651993d68f8 keycode 0xf0
+ps2_put_keycode 0x5651993d68f8 keycode 0x36
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0xf0
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0x36
+ps2_keyboard_event 0x5651993d68f8 lnx 8 down 1 modifier 0x0 modifiers 0x0 set 2 xlate 0
+ps2_put_keycode 0x5651993d68f8 keycode 0x3d
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0x3d
+ps2_keyboard_event 0x5651993d68f8 lnx 8 down 0 modifier 0x0 modifiers 0x0 set 2 xlate 0
+ps2_put_keycode 0x5651993d68f8 keycode 0xf0
+ps2_put_keycode 0x5651993d68f8 keycode 0x3d
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0xf0
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0x3d
+ps2_keyboard_event 0x5651993d68f8 lnx 9 down 1 modifier 0x0 modifiers 0x0 set 2 xlate 0
+ps2_put_keycode 0x5651993d68f8 keycode 0x3e
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0x3e
+ps2_keyboard_event 0x5651993d68f8 lnx 9 down 0 modifier 0x0 modifiers 0x0 set 2 xlate 0
+ps2_put_keycode 0x5651993d68f8 keycode 0xf0
+ps2_put_keycode 0x5651993d68f8 keycode 0x3e
+ps2_keyboard_event 0x5651993d68f8 lnx 10 down 1 modifier 0x0 modifiers 0x0 set 2 xlate 0
+ps2_put_keycode 0x5651993d68f8 keycode 0x46
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0xf0
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0x3e
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0x46
+ps2_keyboard_event 0x5651993d68f8 lnx 10 down 0 modifier 0x0 modifiers 0x0 set 2 xlate 0
+ps2_put_keycode 0x5651993d68f8 keycode 0xf0
+ps2_put_keycode 0x5651993d68f8 keycode 0x46
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0xf0
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0x46
+ps2_keyboard_event 0x5651993d68f8 lnx 11 down 1 modifier 0x0 modifiers 0x0 set 2 xlate 0
+ps2_put_keycode 0x5651993d68f8 keycode 0x45
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0x45
+ps2_keyboard_event 0x5651993d68f8 lnx 11 down 0 modifier 0x0 modifiers 0x0 set 2 xlate 0
+ps2_put_keycode 0x5651993d68f8 keycode 0xf0
+ps2_put_keycode 0x5651993d68f8 keycode 0x45
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0xf0
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0x45
+ps2_keyboard_event 0x5651993d68f8 lnx 12 down 1 modifier 0x0 modifiers 0x0 set 2 xlate 0
+ps2_put_keycode 0x5651993d68f8 keycode 0x4e
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0x4e
+ps2_keyboard_event 0x5651993d68f8 lnx 12 down 0 modifier 0x0 modifiers 0x0 set 2 xlate 0
+ps2_put_keycode 0x5651993d68f8 keycode 0xf0
+ps2_put_keycode 0x5651993d68f8 keycode 0x4e
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0xf0
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0x4e
+ps2_keyboard_event 0x5651993d68f8 lnx 4 down 1 modifier 0x0 modifiers 0x0 set 2 xlate 0
+ps2_put_keycode 0x5651993d68f8 keycode 0x26
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0x26
+ps2_keyboard_event 0x5651993d68f8 lnx 5 down 1 modifier 0x0 modifiers 0x0 set 2 xlate 0
+ps2_put_keycode 0x5651993d68f8 keycode 0x25
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0x25
+ps2_keyboard_event 0x5651993d68f8 lnx 4 down 0 modifier 0x0 modifiers 0x0 set 2 xlate 0
+ps2_put_keycode 0x5651993d68f8 keycode 0xf0
+ps2_put_keycode 0x5651993d68f8 keycode 0x26
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0xf0
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0x26
+ps2_keyboard_event 0x5651993d68f8 lnx 5 down 0 modifier 0x0 modifiers 0x0 set 2 xlate 0
+ps2_put_keycode 0x5651993d68f8 keycode 0xf0
+ps2_put_keycode 0x5651993d68f8 keycode 0x25
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0xf0
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0x25
+ps2_keyboard_event 0x5651993d68f8 lnx 4 down 1 modifier 0x0 modifiers 0x0 set 2 xlate 0
+ps2_put_keycode 0x5651993d68f8 keycode 0x26
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0x26
+ps2_keyboard_event 0x5651993d68f8 lnx 5 down 1 modifier 0x0 modifiers 0x0 set 2 xlate 0
+ps2_put_keycode 0x5651993d68f8 keycode 0x25
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0x25
+ps2_keyboard_event 0x5651993d68f8 lnx 4 down 0 modifier 0x0 modifiers 0x0 set 2 xlate 0
+ps2_put_keycode 0x5651993d68f8 keycode 0xf0
+ps2_put_keycode 0x5651993d68f8 keycode 0x26
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0xf0
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0x26
+ps2_keyboard_event 0x5651993d68f8 lnx 3 down 1 modifier 0x0 modifiers 0x0 set 2 xlate 0
+ps2_put_keycode 0x5651993d68f8 keycode 0x1e
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0x1e
+ps2_keyboard_event 0x5651993d68f8 lnx 4 down 1 modifier 0x0 modifiers 0x0 set 2 xlate 0
+ps2_put_keycode 0x5651993d68f8 keycode 0x26
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0x26
+ps2_keyboard_event 0x5651993d68f8 lnx 3 down 0 modifier 0x0 modifiers 0x0 set 2 xlate 0
+ps2_put_keycode 0x5651993d68f8 keycode 0xf0
+ps2_put_keycode 0x5651993d68f8 keycode 0x1e
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0xf0
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0x1e
+ps2_keyboard_event 0x5651993d68f8 lnx 4 down 0 modifier 0x0 modifiers 0x0 set 2 xlate 0
+ps2_put_keycode 0x5651993d68f8 keycode 0xf0
+ps2_put_keycode 0x5651993d68f8 keycode 0x26
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0xf0
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0x26
+ps2_keyboard_event 0x5651993d68f8 lnx 5 down 0 modifier 0x0 modifiers 0x0 set 2 xlate 0
+ps2_put_keycode 0x5651993d68f8 keycode 0xf0
+ps2_put_keycode 0x5651993d68f8 keycode 0x25
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0xf0
+ps2_read_data 0x5651993d68f8
+pckbd_kbd_read_data 0x25

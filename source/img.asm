@@ -839,9 +839,9 @@ START_SECTION IMPL_TABLE
             jnz .loop
 
             ; check if shift and/or altgr are pressed
-            test dword [eax + (kbd_state - GVCT_START) + (0x0e / 32)], 1 << (0x0e % 32) ; left shift
+            test dword [eax + (kbd_state - GVCT_START) + (0x0e / 32 * 4)], 1 << (0x0e % 32) ; left shift
             setnz cl
-            test dword [eax + (kbd_state - GVCT_START) + (0x57 / 32)], 1 << (0x57 % 32) ; right alt
+            test dword [eax + (kbd_state - GVCT_START) + (0x57 / 32 * 4)], 1 << (0x57 % 32) ; right alt
             setnz ch
 
             cmp cx, (1 << 0 | 1 << 8)
@@ -871,6 +871,8 @@ START_SECTION IMPL_TABLE
             .handle_key:
                 test ebx, ebx
                 jz .unmapped
+                cmp ebx, 1 ; keycodes mapped to SOH are deliberately meant to be ignored
+                je .loop
 
                 ; echo key
                 DPUSH ebx
@@ -885,6 +887,8 @@ START_SECTION IMPL_TABLE
                 DPUSH '^'
                 FCALL PUTC
                 FCALL PUTC
+
+                ; todo: add these fake characters to the line buffer
                 jmp .loop
         .end:
         and dword [eax + (pending_work - GVCT_START)], ~(1 << 2) ; clear pending work for terminal
@@ -1623,7 +1627,8 @@ START_SECTION GVCT
     %endrep
     idet_end:
 
-    ; maps scancode set 2 values to our internal 7-bit keycodes
+    ; maps scancode set 2 values to our internal 7-bit keycodes, mostly auto-generated with GNU AWK (by taking an existing key table,
+    ; extracting the scancodes out of it, sorting them, and mapping them to consecutive keycode indices starting at 1 and ending at 127)
     keycode_map:
     START_MAPPING 256
         MAP_IDX 0x01, 0x01 ; F9
@@ -1767,13 +1772,149 @@ START_SECTION GVCT
         ; but rather has special edge-case logic directly in the driver
     STOP_MAPPING
 
-    ; character map for terminal (to map keycodes to ascii characters)
+    ; character map for terminal, maps keycodes to ascii codes, structure partially auto-generated
+    ; with GNU AWK, the format here is 4-byte entries representing the different ASCII characters generated
+    ; by a keycode for normal, shift, altgr, and shift+altgr modifiers respectively. There are two notable
+    ; exceptions, NUL and SOH, keycodes mapped to NUL are treated as *unmapped*, and display as '\0'
+    ; (this is also put into the line buffer as the two characters to avoid confusion about the screen/what was actually read),
+    ; keycodes mapped to SOH are treated as *nonprinting*, and thus are ignored entirely
+    ; (example, pressing modifier keys shouldn't mess up the screen)
+
+    ; finally, for the general philosophy of how this is filled out, I consider any character that isn't useful *in*
+    ; the terminal as better left unmapped than mapped to SOH, this means that while left shift and altgr are mapped to SOH,
+    ; pretty much anything else that doesn't generate a character is unmapped, I believe this to be better than silently dropping
+    ; all non-printing characters, though if you find yourself fat-fingering keys often you can change the TERMINAL_DRIVER function
+
+    ; todo: fill out the entries here
     align 4, db 0
     char_map:
-    ; todo: fill this out, prolly with an awk script or smth
-    ; to parse the idx mappings and give me at least the first of the 4 characters for
-    ; each of these entries
-    times 128 dd 0
+        db `\0\0\0\0` ; no character, reserved
+        db `\0\0\0\0` ; 0x01: F9
+        db `\0\0\0\0` ; 0x02: F5
+        db `\0\0\0\0` ; 0x03: F3
+        db `\0\0\0\0` ; 0x04: F1
+        db `\0\0\0\0` ; 0x05: F2
+        db `\0\0\0\0` ; 0x06: F12
+        db `\0\0\0\0` ; 0x07: F10
+        db `\0\0\0\0` ; 0x08: F8
+        db `\0\0\0\0` ; 0x09: F6
+        db `\0\0\0\0` ; 0x0a: F4
+        db `\0\0\0\0` ; 0x0b: tab
+        db `\`~\0\0` ; 0x0c: ` (back tick)
+        db `\0\0\0\0` ; 0x0d: left alt
+        db `\1\1\1\1` ; 0x0e: left shift
+        db `\0\0\0\0` ; 0x0f: left control
+        db `qQ\0\0` ; 0x10: Q
+        db `1!\0\0` ; 0x11: 1
+        db `zZ\0\0` ; 0x12: Z
+        db `sS\0\0` ; 0x13: S
+        db `aA\0\0` ; 0x14: A
+        db `wW\0\0` ; 0x15: W
+        db `2@\0\0` ; 0x16: 2
+        db `cC\0\0` ; 0x17: C
+        db `xX\0\0` ; 0x18: X
+        db `dD\0\0` ; 0x19: D
+        db `eE\0\0` ; 0x1a: E
+        db `4$\0\0` ; 0x1b: 4
+        db `3#\0\0` ; 0x1c: 3
+        db ` \0\0\0` ; 0x1d: space
+        db `vV\0\0` ; 0x1e: V
+        db `fF\0\0` ; 0x1f: F
+        db `tT\0\0` ; 0x20: T
+        db `rR\0\0` ; 0x21: R
+        db `5%\0\0` ; 0x22: 5
+        db `nN\0\0` ; 0x23: N
+        db `bB\0\0` ; 0x24: B
+        db `hH\0\0` ; 0x25: H
+        db `gG\0\0` ; 0x26: G
+        db `yY\0\0` ; 0x27: Y
+        db `6^\0\0` ; 0x28: 6
+        db `mM\0\0` ; 0x29: M
+        db `jJ\0\0` ; 0x2a: J
+        db `uU\0\0` ; 0x2b: U
+        db `7&\0\0` ; 0x2c: 7
+        db `8*\0\0` ; 0x2d: 8
+        db `,<\0\0` ; 0x2e: ,
+        db `kK\0\0` ; 0x2f: K
+        db `iI\0\0` ; 0x30: I
+        db `oO\0\0` ; 0x31: O
+        db `0)\0\0` ; 0x32: 0 (zero)
+        db `9(\0\0` ; 0x33: 9
+        db `.>\0\0` ; 0x34: .
+        db `/?\0\0` ; 0x35: /
+        db `lL\0\0` ; 0x36: L
+        db `;:\0\0` ; 0x37: ;
+        db `pP\0\0` ; 0x38: P
+        db `-_\0\0` ; 0x39: -
+        db `'"\0\0` ; 0x3a: '
+        db `[{\0\0` ; 0x3b: [
+        db `=+\0\0` ; 0x3c: =
+        db `\0\0\0\0` ; 0x3d: CapsLock
+        db `\0\0\0\0` ; 0x3e: right shift
+        db `\0\0\0\0` ; 0x3f: enter
+        db `]}\0\0` ; 0x40: ]
+        db `\\|\0\0` ; 0x41: backslash
+        db `\b\0\0\0` ; 0x42: backspace
+        db `\0\0\0\0` ; 0x43: (keypad) 1
+        db `\0\0\0\0` ; 0x44: (keypad) 4
+        db `\0\0\0\0` ; 0x45: (keypad) 7
+        db `\0\0\0\0` ; 0x46: (keypad) 0
+        db `\0\0\0\0` ; 0x47: (keypad) .
+        db `\0\0\0\0` ; 0x48: (keypad) 2
+        db `\0\0\0\0` ; 0x49: (keypad) 5
+        db `\0\0\0\0` ; 0x4a: (keypad) 6
+        db `\0\0\0\0` ; 0x4b: (keypad) 8
+        db `\0\0\0\0` ; 0x4c: escape
+        db `\0\0\0\0` ; 0x4d: NumberLock
+        db `\0\0\0\0` ; 0x4e: F11
+        db `\0\0\0\0` ; 0x4f: (keypad) +
+        db `\0\0\0\0` ; 0x50: (keypad) 3
+        db `\0\0\0\0` ; 0x51: (keypad) -
+        db `\0\0\0\0` ; 0x52: (keypad) *
+        db `\0\0\0\0` ; 0x53: (keypad) 9
+        db `\0\0\0\0` ; 0x54: ScrollLock
+        db `\0\0\0\0` ; 0x55: F7
+        db `\0\0\0\0` ; 0x56: (multimedia) WWW search
+        db `\1\1\1\1` ; 0x57: right alt
+        db `\0\0\0\0` ; 0x58: right control
+        db `\0\0\0\0` ; 0x59: (multimedia) previous track
+        db `\0\0\0\0` ; 0x5a: (multimedia) WWW favourites
+        db `\0\0\0\0` ; 0x5b: left GUI
+        db `\0\0\0\0` ; 0x5c: (multimedia) WWW refresh
+        db `\0\0\0\0` ; 0x5d: (multimedia) volume down
+        db `\0\0\0\0` ; 0x5e: (multimedia) mute
+        db `\0\0\0\0` ; 0x5f: right GUI
+        db `\0\0\0\0` ; 0x60: (multimedia) WWW stop
+        db `\0\0\0\0` ; 0x61: (multimedia) calculator
+        db `\0\0\0\0` ; 0x62: apps
+        db `\0\0\0\0` ; 0x63: (multimedia) WWW forward
+        db `\0\0\0\0` ; 0x64: (multimedia) volume up
+        db `\0\0\0\0` ; 0x65: (multimedia) play/pause
+        db `\0\0\0\0` ; 0x66: (ACPI) power
+        db `\0\0\0\0` ; 0x67: (multimedia) WWW back
+        db `\0\0\0\0` ; 0x68: (multimedia) WWW home
+        db `\0\0\0\0` ; 0x69: (multimedia) stop
+        db `\0\0\0\0` ; 0x6a: (ACPI) sleep
+        db `\0\0\0\0` ; 0x6b: (multimedia) my computer
+        db `\0\0\0\0` ; 0x6c: (multimedia) email
+        db `\0\0\0\0` ; 0x6d: (keypad) /
+        db `\0\0\0\0` ; 0x6e: (multimedia) next track
+        db `\0\0\0\0` ; 0x6f: (multimedia) media select
+        db `\0\0\0\0` ; 0x70: (keypad) enter
+        db `\0\0\0\0` ; 0x71: (ACPI) wake
+        db `\0\0\0\0` ; 0x72: end
+        db `\0\0\0\0` ; 0x73: cursor left
+        db `\0\0\0\0` ; 0x74: home
+        db `\0\0\0\0` ; 0x75: insert
+        db `\0\0\0\0` ; 0x76: delete
+        db `\0\0\0\0` ; 0x77: cursor down
+        db `\0\0\0\0` ; 0x78: cursor right
+        db `\0\0\0\0` ; 0x79: cursor up
+        db `\0\0\0\0` ; 0x7a: page down
+        db `\0\0\0\0` ; 0x7b: page up
+        db `\0\0\0\0` ; 0x7c: print-screen (special)
+        db `\0\0\0\0` ; 0x7e: break (special)
+        db `\0\0\0\0` ; 0x7f: sysrq (special)
 
     ; key code state, for each key this can be 0 or 1 representing whether it's pressed
     align 4, db 0

@@ -1,0 +1,126 @@
+db `\0\0\0\0` ; 0x01 F9
+db `\0\0\0\0` ; 0x02 F5
+db `\0\0\0\0` ; 0x03 F3
+db `\0\0\0\0` ; 0x04 F1
+db `\0\0\0\0` ; 0x05 F2
+db `\0\0\0\0` ; 0x06 F12
+db `\0\0\0\0` ; 0x07 F10
+db `\0\0\0\0` ; 0x08 F8
+db `\0\0\0\0` ; 0x09 F6
+db `\0\0\0\0` ; 0x0a F4
+db `\0\0\0\0` ; 0x0b tab
+db `\0\0\0\0` ; 0x0c ` (back tick)
+db `\0\0\0\0` ; 0x0d left alt
+db `\0\0\0\0` ; 0x0e left shift
+db `\0\0\0\0` ; 0x0f left control
+db `\0\0\0\0` ; 0x10 Q
+db `\0\0\0\0` ; 0x11 1
+db `\0\0\0\0` ; 0x12 Z
+db `\0\0\0\0` ; 0x13 S
+db `\0\0\0\0` ; 0x14 A
+db `\0\0\0\0` ; 0x15 W
+db `\0\0\0\0` ; 0x16 2
+db `\0\0\0\0` ; 0x17 C
+db `\0\0\0\0` ; 0x18 X
+db `\0\0\0\0` ; 0x19 D
+db `\0\0\0\0` ; 0x1a E
+db `\0\0\0\0` ; 0x1b 4
+db `\0\0\0\0` ; 0x1c 3
+db `\0\0\0\0` ; 0x1d space
+db `\0\0\0\0` ; 0x1e V
+db `\0\0\0\0` ; 0x1f F
+db `\0\0\0\0` ; 0x20 T
+db `\0\0\0\0` ; 0x21 R
+db `\0\0\0\0` ; 0x22 5
+db `\0\0\0\0` ; 0x23 N
+db `\0\0\0\0` ; 0x24 B
+db `\0\0\0\0` ; 0x25 H
+db `\0\0\0\0` ; 0x26 G
+db `\0\0\0\0` ; 0x27 Y
+db `\0\0\0\0` ; 0x28 6
+db `\0\0\0\0` ; 0x29 M
+db `\0\0\0\0` ; 0x2a J
+db `\0\0\0\0` ; 0x2b U
+db `\0\0\0\0` ; 0x2c 7
+db `\0\0\0\0` ; 0x2d 8
+db `\0\0\0\0` ; 0x2e ,
+db `\0\0\0\0` ; 0x2f K
+db `\0\0\0\0` ; 0x30 I
+db `\0\0\0\0` ; 0x31 O
+db `\0\0\0\0` ; 0x32 0 (zero)
+db `\0\0\0\0` ; 0x33 9
+db `\0\0\0\0` ; 0x34 .
+db `\0\0\0\0` ; 0x35 /
+db `\0\0\0\0` ; 0x36 L
+db `\0\0\0\0` ; 0x37 ;
+db `\0\0\0\0` ; 0x38 P
+db `\0\0\0\0` ; 0x39 -
+db `\0\0\0\0` ; 0x3a '
+db `\0\0\0\0` ; 0x3b [
+db `\0\0\0\0` ; 0x3c =
+db `\0\0\0\0` ; 0x3d CapsLock
+db `\0\0\0\0` ; 0x3e right shift
+db `\0\0\0\0` ; 0x3f enter
+db `\0\0\0\0` ; 0x40 ]
+db `\0\0\0\0` ; 0x41 backslash
+db `\0\0\0\0` ; 0x42 backspace
+db `\0\0\0\0` ; 0x43 (keypad) 1
+db `\0\0\0\0` ; 0x44 (keypad) 4
+db `\0\0\0\0` ; 0x45 (keypad) 7
+db `\0\0\0\0` ; 0x46 (keypad) 0
+db `\0\0\0\0` ; 0x47 (keypad) .
+db `\0\0\0\0` ; 0x48 (keypad) 2
+db `\0\0\0\0` ; 0x49 (keypad) 5
+db `\0\0\0\0` ; 0x4a (keypad) 6
+db `\0\0\0\0` ; 0x4b (keypad) 8
+db `\0\0\0\0` ; 0x4c escape
+db `\0\0\0\0` ; 0x4d NumberLock
+db `\0\0\0\0` ; 0x4e F11
+db `\0\0\0\0` ; 0x4f (keypad) +
+db `\0\0\0\0` ; 0x50 (keypad) 3
+db `\0\0\0\0` ; 0x51 (keypad) -
+db `\0\0\0\0` ; 0x52 (keypad) *
+db `\0\0\0\0` ; 0x53 (keypad) 9
+db `\0\0\0\0` ; 0x54 ScrollLock
+db `\0\0\0\0` ; 0x55 alias for F7 since some dipshit at intel decided to make their scancodes 7-bit only meaning I can't get 0x83
+db `\0\0\0\0` ; 0x56 (multimedia) WWW search
+db `\0\0\0\0` ; 0x57 right alt
+db `\0\0\0\0` ; 0x58 right control
+db `\0\0\0\0` ; 0x59 (multimedia) previous track
+db `\0\0\0\0` ; 0x5a (multimedia) WWW favourites
+db `\0\0\0\0` ; 0x5b left GUI
+db `\0\0\0\0` ; 0x5c (multimedia) WWW refresh
+db `\0\0\0\0` ; 0x5d (multimedia) volume down
+db `\0\0\0\0` ; 0x5e (multimedia) mute
+db `\0\0\0\0` ; 0x5f right GUI
+db `\0\0\0\0` ; 0x60 (multimedia) WWW stop
+db `\0\0\0\0` ; 0x61 (multimedia) calculator
+db `\0\0\0\0` ; 0x62 apps
+db `\0\0\0\0` ; 0x63 (multimedia) WWW forward
+db `\0\0\0\0` ; 0x64 (multimedia) volume up
+db `\0\0\0\0` ; 0x65 (multimedia) play/pause
+db `\0\0\0\0` ; 0x66 (ACPI) power
+db `\0\0\0\0` ; 0x67 (multimedia) WWW back
+db `\0\0\0\0` ; 0x68 (multimedia) WWW home
+db `\0\0\0\0` ; 0x69 (multimedia) stop
+db `\0\0\0\0` ; 0x6a (ACPI) sleep
+db `\0\0\0\0` ; 0x6b (multimedia) my computer
+db `\0\0\0\0` ; 0x6c (multimedia) email
+db `\0\0\0\0` ; 0x6d (keypad) /
+db `\0\0\0\0` ; 0x6e (multimedia) next track
+db `\0\0\0\0` ; 0x6f (multimedia) media select
+db `\0\0\0\0` ; 0x70 (keypad) enter
+db `\0\0\0\0` ; 0x71 (ACPI) wake
+db `\0\0\0\0` ; 0x72 end
+db `\0\0\0\0` ; 0x73 cursor left
+db `\0\0\0\0` ; 0x74 home
+db `\0\0\0\0` ; 0x75 insert
+db `\0\0\0\0` ; 0x76 delete
+db `\0\0\0\0` ; 0x77 cursor down
+db `\0\0\0\0` ; 0x78 cursor right
+db `\0\0\0\0` ; 0x79 cursor up
+db `\0\0\0\0` ; 0x7a page down
+db `\0\0\0\0` ; 0x7b page up
+db `\0\0\0\0` ; 0x7c print-screen (special)
+db `\0\0\0\0` ; 0x7e break (special)
+db `\0\0\0\0` ; 0x7f sysrq (special)
