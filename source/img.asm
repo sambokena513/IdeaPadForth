@@ -874,6 +874,11 @@ START_SECTION IMPL_TABLE
                 cmp ebx, 1 ; keycodes mapped to SOH are deliberately meant to be ignored
                 je .loop
 
+                cmp ebx, 8 ; keycodes mapped to backspace produce "\b \b" instead
+                je .backspace
+                cmp ebx, 10 ; keycoes mapped to newline produce crlf instead
+                je .newline
+
                 ; echo key
                 DPUSH ebx
                 FCALL PUTC
@@ -889,6 +894,25 @@ START_SECTION IMPL_TABLE
                 FCALL PUTC
 
                 ; todo: add these fake characters to the line buffer
+                jmp .loop
+
+            .newline:
+                DPUSH 13
+                DPUSH 10
+                FCALL PUTC
+                FCALL PUTC
+
+                ; todo: add these fake characters to the line buffer
+                jmp .loop
+
+            .backspace:
+                DPUSH 8
+                DPUSH 32
+                DPUSH 8
+                FCALL PUTC
+                FCALL PUTC
+                FCALL PUTC
+
                 jmp .loop
         .end:
         and dword [eax + (pending_work - GVCT_START)], ~(1 << 2) ; clear pending work for terminal
@@ -1239,73 +1263,119 @@ START_SECTION IMPL_TABLE
         ret
     END_IMPL
 
-    ; print a character to the console
-    IMPL_PRIM PUTC, 1
-        ; TODO, rework this to be a little less disgusting, and to add \b support
+    ; move the cursor back one position
+    IMPL_PRIM TERM_BACKSPACE, 1
+        mov eax, [0x7c20]
+        movzx ecx, word [eax + console_cursor - GVCT_START]
+        mov bl, byte [eax + (console_attr - GVCT_START)]
+        mov dl, byte [eax + (console_cursorattr - GVCT_START)]
 
+        ; make sure that we can go backwards
+        test ecx, ecx
+        jnz .good
+        ret
+
+        .good:
+            mov byte [0xb8001 + ecx*2], bl
+            mov byte [0xb8001 + ecx*2 - 1*2], dl
+            dec word [eax + (console_cursor - GVCT_START)]
+            ret
+    END_IMPL
+
+    ; move the cursor back to the start of the line
+    IMPL_PRIM TERM_CR, 1
+        mov ebx, [0x7c20]
+
+        ; TOS = eax / 80 * 80, eax = cursor
+        movzx eax, word [ebx + (console_cursor - GVCT_START)]
+        DPUSH eax
+        mov ecx, 80
+        xor edx, edx
+        div ecx
+        mul ecx
+
+        ; move the cursor
+        mov cl, byte [ebx + (console_attr - GVCT_START)]
+        mov dl, byte [ebx + (console_cursorattr - GVCT_START)]
+        mov byte [0xb8001 + esi*2], cl
+        mov byte [0xb8001 + eax*2], dl
+        mov word [ebx + (console_cursor - GVCT_START)], ax
+        DPOP
+        ret
+    END_IMPL
+
+    ; move the cursor down one line
+    IMPL_PRIM TERM_LN, 1
         mov eax, [0x7c20]
 
-        ; no need to scroll for carriage return, it doesn't move the cursor forward
-        cmp esi, 13
-        je .after_scroll
-
-        ; first scroll if the cursor would overflow
-        cmp esi, 10
-        jne .no_ln_scroll
-            ; newline scroll
-            cmp word [eax + (console_cursor - GVCT_START)], 1920
-            jb .after_scroll
-                FCALL SCROLL
-        .no_ln_scroll:
-            ; normal char scroll
-            cmp word [eax + (console_cursor - GVCT_START)], 1999 ; since the cursor is one ahead of the text we do 1999 instead of 2000
-            jb .after_scroll
+        ; scroll if needed
+        cmp word [eax + (console_cursor - GVCT_START)], 1920
+        jb .after_scroll
             FCALL SCROLL
         .after_scroll:
 
-        ; load values, al = char to print, bl = attribute byte for char, dl = attribute byte for cursor, cx = cursor
-        mov eax, [0x7c20]
+        ; update displayed cursor
+        movzx ecx, word [eax + (console_cursor - GVCT_START)]
         mov bl, byte [eax + (console_attr - GVCT_START)]
         mov dl, byte [eax + (console_cursorattr - GVCT_START)]
-        movzx ecx, word [eax + (console_cursor - GVCT_START)]
+        mov byte [0xb8001 + ecx*2], bl
+        mov byte [0xb8001 + ecx*2 + 80*2], dl
 
-        mov byte [0xb8001 + ecx * 2], bl ; remove cursor from current one
+        ; update saved cursor
+        add word [eax + (console_cursor - GVCT_START)], 80
+        ret
+    END_IMPL
 
-        DPOPR eax
-        cmp al, 10
-        je .ln
-        cmp al, 13
+    ; print a character to the console
+    IMPL_PRIM PUTC, 1
+        mov eax, [0x7c20]
+
+        cmp esi, 8 ; \b
+        je .backspace
+        cmp esi, 13 ; \r
         je .cr
-            ; print char
-            mov byte [0xb8000 + ecx * 2], al ; char
-            inc cx
-            mov byte [0xb8001 + ecx * 2], dl ; new cursor
+        cmp esi, 10 ; \n
+        je .ln
+
+        ; scroll first if needed
+        cmp word [eax + (console_cursor - GVCT_START)], 1999 ; since the cursor is one ahead of the text we do 1999 instead of 2000
+        jb .after_scroll
+        FCALL SCROLL
+        .after_scroll:
+
+        ; print char
+        .char:
             mov eax, [0x7c20]
-            mov word [eax + (console_cursor - GVCT_START)], cx ; save cursor
+
+            ; load values
+            movzx ecx, word [eax + (console_cursor - GVCT_START)]
+            xor ebx, ebx
+            mov bh, byte [eax + (console_attr - GVCT_START)] 
+            mov dl, byte [eax + (console_cursorattr - GVCT_START)]
+            or esi, ebx
+
+            ; display character and new cursor
+            mov word [0xb8000 + ecx*2], si
+            mov byte [0xb8001 + ecx*2 + 1*2], dl
+
+            inc word [eax + (console_cursor - GVCT_START)]
+            DPOP
             ret
+
+        ; escape sequences
         .ln:
-            ; new line
-            add cx, 80 ; length of one line
-            mov byte [0xb8001 + ecx * 2], dl
-            mov eax, [0x7c20]
-            mov word [eax + (console_cursor - GVCT_START)], cx ; save cursor
+            FCALL TERM_LN
+            DPOP
             ret
+
         .cr:
-            ; carriage return
-            mov bl, dl
-            DPUSH ecx
+            FCALL TERM_CR
+            DPOP
+            ret
 
-            ; dx = cx % 80
-            xor dx, dx
-            mov ax, cx
-            mov cx, 80
-            div cx
-
-            DPOPR ecx
-            sub cx, dx
-            mov byte [0xb8001 + ecx * 2], bl
-            mov eax, [0x7c20]
-            mov word [eax + (console_cursor - GVCT_START)], cx ; save cursor
+        .backspace:
+            FCALL TERM_BACKSPACE
+            DPOP
             ret
     END_IMPL
 
@@ -1527,6 +1597,9 @@ START_SECTION WD_TABLE
     WORD_DESC CONSOLE_INIT, 0
     WORD_DESC CLS, 0
     WORD_DESC SCROLL, 0
+    WORD_DESC TERM_BACKSPACE, 0
+    WORD_DESC TERM_CR, 0
+    WORD_DESC TERM_LN, 0
     WORD_DESC PUTC, 0
     WORD_DESC PUTS, 0
     WORD_DESC PUTH, 0
@@ -1548,6 +1621,9 @@ START_SECTION DICT
     DICT_ENTRY CONSOLE_INIT, "CONSOLE_INIT"
     DICT_ENTRY CLS, "CLS"
     DICT_ENTRY SCROLL, "SCROLL"
+    DICT_ENTRY TERM_BACKSPACE, "TERM_BACKSPACE"
+    DICT_ENTRY TERM_CR, "TERM_CR"
+    DICT_ENTRY TERM_LN, "TERM_LN"
     DICT_ENTRY PUTC, "PUTC"
     DICT_ENTRY PUTS, "PUTS"
     DICT_ENTRY PUTH, "PUTH"
@@ -1851,7 +1927,7 @@ START_SECTION GVCT
         db `=+\0\0` ; 0x3c: =
         db `\0\0\0\0` ; 0x3d: CapsLock
         db `\0\0\0\0` ; 0x3e: right shift
-        db `\0\0\0\0` ; 0x3f: enter
+        db `\n\0\0\0` ; 0x3f: enter
         db `]}\0\0` ; 0x40: ]
         db `\\|\0\0` ; 0x41: backslash
         db `\b\0\0\0` ; 0x42: backspace
