@@ -422,7 +422,7 @@ START_SECTION IMPL_TABLE
         FCALL SET_INT
 
         ; bind timer handler
-        DPUSH WDIDX(TIMER_INT) ; index of ISR
+        DPUSH WDIDX(TIMER_INT)
         DPUSH 0
         DPUSH 0x20 ; IRQ 0
         FCALL SET_INT
@@ -897,22 +897,19 @@ START_SECTION IMPL_TABLE
                 jmp .loop
 
             .newline:
-                DPUSH 13
-                DPUSH 10
-                FCALL PUTC
-                FCALL PUTC
+                FCALL TERM_CR
+                FCALL TERM_LN
 
                 ; todo: add these fake characters to the line buffer
                 jmp .loop
 
             .backspace:
-                DPUSH 8
+                FCALL TERM_BACKSPACE
                 DPUSH 32
-                DPUSH 8
                 FCALL PUTC
-                FCALL PUTC
-                FCALL PUTC
+                FCALL TERM_BACKSPACE
 
+                ; todo, once line buffering exists this should also remove a character from the buffer
                 jmp .loop
         .end:
         and dword [eax + (pending_work - GVCT_START)], ~(1 << 2) ; clear pending work for terminal
@@ -1927,7 +1924,7 @@ START_SECTION GVCT
         db `=+\0\0` ; 0x3c: =
         db `\0\0\0\0` ; 0x3d: CapsLock
         db `\0\0\0\0` ; 0x3e: right shift
-        db `\n\0\0\0` ; 0x3f: enter
+        db `\n\r\0\0` ; 0x3f: enter
         db `]}\0\0` ; 0x40: ]
         db `\\|\0\0` ; 0x41: backslash
         db `\b\0\0\0` ; 0x42: backspace

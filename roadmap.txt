@@ -1,5 +1,14 @@
 1. Working bootloader that can load forth images. (Done)
-2. Single-tasking Forth that loops inside INTERPRET getting keyboard input and producing console output.
-3. Single-tasking Forth capable of reading a pre-made script from disk or USB mass storage to compile future extensions.
+
+2. Single-tasking Forth that loops inside INTERPRET getting keyboard input and
+producing console output. (in progress, I've got a basic keyboard and terminal
+driver, but don't yet have line buffering, and thus can't actually get
+terminal input for anything like INTERPRET yet)
+
+3. Single-tasking Forth capable of reading a pre-made script from disk or USB
+mass storage to compile future extensions.
+
 4. Multi-tasking Forth.
-5. Multi-tasking Forth with an optimizing compiler (all the previous ones use subroutine-threading).
+
+5. Multi-tasking Forth with an optimizing compiler (all the previous ones use
+subroutine-threading).
