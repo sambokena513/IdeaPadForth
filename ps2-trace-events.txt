@@ -1,4 +1,0 @@
-ps2_keyboard_event
-ps2_put_keycode
-ps2_read_data
-pckbd_kbd_read_data
