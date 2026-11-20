@@ -2053,8 +2053,8 @@ START_SECTION GVCT
         db `\0\0\0\0` ; 0x7a: page down
         db `\0\0\0\0` ; 0x7b: page up
         db `\0\0\0\0` ; 0x7c: print-screen (special)
-        db `\0\0\0\0` ; 0x7e: break (special)
         db `\0\0\0\0` ; 0x7d: pause (special)
+        db `\0\0\0\0` ; 0x7e: break (special)
         db `\0\0\0\0` ; 0x7f: sysrq (special)
 
     ; key code state, for each key this can be 0 or 1 representing whether it's pressed
