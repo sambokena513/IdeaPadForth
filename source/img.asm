@@ -438,6 +438,13 @@ START_SECTION IMPL_TABLE
         and al, ~((1 << 0) | (1 << 1))
         out mPICd, al
 
+        mov eax, [0x7c20]
+        mov ebx, [eax + (initmsg_len - GVCT_START)]
+        lea eax, [eax + (initmsg - GVCT_START)]
+        DPUSH eax
+        DPUSH ebx
+        FCALL PUTS
+
         ; finally, enter the main loop
         FCALL KMAIN
     END_IMPL
@@ -1545,13 +1552,13 @@ START_SECTION IMPL_TABLE
         cmp al, PS2_KBD_SELFTEST_PASSED
         jne .panic
 
-        ; set scan code 2, this is the default and should already be set,
-        ; especially since we disabled translation, but just in case we'll set it here
-
-        ; set scan code set command
-        PS2_KBD_COMMAND PS2_KBD_SET
-        ; scan code set number; 2
-        PS2_KBD_COMMAND 2
+        ; why do we not explicitly set scancode set 2?
+        ; because doing so would actually *decrease*
+        ; hardware compatibility for more modern 32-bit
+        ; computers as most of the time the keyboards
+        ; don't even implement this command
+        ; since almost every keyboard starts with scancode set 2
+        ; there's no issue with just assuming it already has the correct one
 
         ; since we disabled scanning all the way at the start,
         ; we need to reenable it here
@@ -1706,6 +1713,9 @@ START_SECTION GVCT
 
     greeting db "FIF IMG REVISION 1", 13, 10
     greeting_len dd $ - greeting
+
+    initmsg db "Initialization complete. Entering main loop.", 13, 10
+    initmsg_len dd $ - initmsg
 
     ; struct used by the jmp far in INIT to reload CS
     init_jmpptr:

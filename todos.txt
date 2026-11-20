@@ -1,0 +1,31 @@
+Code cleanups and fixes I've got to get around to sometime:
+
+    - Separate the PS/2 controller driver from the PS/2 keyboard driver,
+      and support reinitialization for the keyboard at runtime.
+
+    - Make task set dynamic; should be able to mark a function
+      as a task and assign it a bit in the pending work bitmap.
+      (this will be useful in the future for stuff like dynamically
+      loading drivers based on discovered devices too)
+
+    - Make PS/2 controller and keyboard initialization more robust
+      by adding timeouts and making the it execute with IRQ 0
+      unmasked and IF = 1
+
+    - Clean up ring buffer implementations to all go through a centralized
+      abstraction, it may be a little slower but it's really in the spirt of
+      forth to keep each function small, no need for every driver to reinvent
+      the FIFO queue.
+
+Features to add (in no particular order):
+
+    - Add a PS/2 mouse driver (in case I'll want console applications in the
+      future, or copy-paste and a window manager, you don't need graphics for
+      the mouse to be useful.
+
+    - Add a PATA IDE driver (maybe later on support AHCI too),
+      should expose a clean read_blocks() and write_blocks() interface,
+      this will later be used for loading forth scripts without the user
+      needing to type the whole thing in each time.
+
+    - Add terminal input so we can make something like INTERPRET eventually.
