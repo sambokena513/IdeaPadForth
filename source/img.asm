@@ -1577,20 +1577,59 @@ START_SECTION IMPL_TABLE
                         ; other than the keyboard, so if we cannot properly initialize it and
                         ; use it, then there's no point in keeping the OS running
     END_IMPL
+
+    ; initialize a ring buffer, takes the pointer to the ring buffer struct (must have at least 16 + size bytes of space)
+    ; the requested size in bytes, and the requested element size (1, 2, or 4) in bytes
+    IMPL_PRIM RING_INIT, 1
+        ret
+    END_IMPL
+
+    IMPL_PRIM RING_ISEMPTY, 1
+        ret
+    END_IMPL
+
+    IMPL_PRIM RING_ISFULL, 1
+        ret
+    END_IMPL
+
+    IMPL_PRIM RING_ENQUEUE, 1
+        ret
+    END_IMPL
+
+    IMPL_PRIM RING_DEQUEUE, 1
+        ret
+    END_IMPL
+
+    IMPL_PRIM RING_TRY_ENQUEUE, 1
+        ret
+    END_IMPL
+
+    IMPL_PRIM RING_TRY_DEQUEUE, 1
+        ret
+    END_IMPL
 END_SECTION
 
 ; word descriptor table
 START_SECTION WD_TABLE
+    ; main
     WORD_DESC INIT, 0
     WORD_DESC KMAIN, 0
+
+    ; drivers/tasks
     WORD_DESC TIMER_HOOK, 0
     WORD_DESC KEYBOARD_DRIVER, 0
     WORD_DESC TERMINAL_DRIVER, 0
+
+    ; error handling
     WORD_DESC PANIC, 0
+
+    ; interrupts
     WORD_DESC INT_INIT, 0
     WORD_DESC SET_INT, 0
     WORD_DESC TIMER_INT, 0
     WORD_DESC KEYBOARD_INT, 0
+
+    ; console & terminal
     WORD_DESC CONSOLE_INIT, 0
     WORD_DESC CLS, 0
     WORD_DESC SCROLL, 0
@@ -1600,7 +1639,18 @@ START_SECTION WD_TABLE
     WORD_DESC PUTC, 0
     WORD_DESC PUTS, 0
     WORD_DESC PUTH, 0
+
+    ; keyboard
     WORD_DESC KEYBOARD_INIT, 0
+
+    ; ring buffers
+    WORD_DESC RING_INIT, 0
+    WORD_DESC RING_ISEMPTY, 0
+    WORD_DESC RING_ISFULL, 0
+    WORD_DESC RING_ENQUEUE, 0
+    WORD_DESC RING_DEQUEUE, 0
+    WORD_DESC RING_TRY_ENQUEUE, 0
+    WORD_DESC RING_TRY_DEQUEUE, 0
 END_SECTION
 
 ; dictionary
@@ -1625,6 +1675,13 @@ START_SECTION DICT
     DICT_ENTRY PUTS, "PUTS"
     DICT_ENTRY PUTH, "PUTH"
     DICT_ENTRY KEYBOARD_INIT, "KEYBOARD_INIT"
+    DICT_ENTRY RING_INIT, "RING_INIT"
+    DICT_ENTRY RING_ISEMPTY, "RING_ISEMPTY"
+    DICT_ENTRY RING_ISFULL, "RING_ISFULL"
+    DICT_ENTRY RING_ENQUEUE, "RING_ENQUEUE"
+    DICT_ENTRY RING_DEQUEUE, "RING_DEQUEUE"
+    DICT_ENTRY RING_TRY_ENQUEUE, "RING_TRY_ENQUEUE"
+    DICT_ENTRY RING_TRY_DEQUEUE, "RING_TRY_DEQUEUE"
 END_SECTION
 
 ; global-variable & constant table
