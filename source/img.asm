@@ -1476,8 +1476,10 @@ START_SECTION IMPL_TABLE
         PS2_WAIT_OBF
         in al, PS2_DATA
 
-        ; disable translation for port 1, and enable the clock (no need to disable IRQs since IF = 0 here anyway)
-        and al, ~((1 << 6) | (1 << 4))
+        ; disable translation for port 1,
+        ; and disable the clock (keeping it enabled causes a race condition in the self-test)
+        and al, ~(1 << 6)
+        or al, 1 << 4
         mov bl, al
 
         ; set config byte
@@ -1487,16 +1489,6 @@ START_SECTION IMPL_TABLE
         PS2_WAIT_IBF
         mov al, bl
         out PS2_DATA, al
-
-        ; though we already flushed once, for some reason in testing I still get scan codes,
-        ; so we flush one more time right before the self-test. If I had to guess why,
-        ; then my hypothesis'd be that the PS/2 controller's pending data, and the keyboard's
-        ; pending data are not one and the same (at least not on all hardware), and the keyboard can only
-        ; move its data into the PS/2 output buffer while the clock signal is active, hence enabling it
-        ; causes us to get some pending data it was waiting to send before, and the first flush didn't
-        ; catch it since it only got the data that was already in the controller, and nothing could make
-        ; it through because the clock signal was disabled.
-        PS2_FLUSH_BUF
 
         ; perform controller self-test
         PS2_WAIT_IBF
@@ -1508,6 +1500,9 @@ START_SECTION IMPL_TABLE
         jne .panic
 
         ; restore config since the self-test may reset it
+        ; this time enable the clock so that devices work
+        and bl, ~(1 << 4)
+
         PS2_WAIT_IBF
         mov al, PS2_WRITE_CFG
         out PS2_COMMAND, al
