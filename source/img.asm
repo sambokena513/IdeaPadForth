@@ -538,41 +538,60 @@ START_SECTION IMPL_TABLE
     IMPL_PRIM KEYBOARD_DRIVER, 1
         .dequeue:
             mov eax, [0x7c20]
-            ; check if buffer is empty
-            cli
-                cmp byte [eax + (sccd_buf_error - GVCT_START)], 0
-                je .no_error
-                    ; if any errors, reset the buffer
-                    mov dword [eax + (sccd_buf_tail - GVCT_START)], 0
-                    mov dword [eax + (sccd_buf_head - GVCT_START)], 0
-                    mov byte [eax + (sccd_buf_error - GVCT_START)], 0
-                .no_error:
 
-                mov ebx, [eax + (sccd_buf_tail - GVCT_START)]
-                cmp ebx, [eax + (sccd_buf_head - GVCT_START)]
-                je .end_dequeue
+            ; try dequeueing a scancode into edx,
+            ; if it fails then we re-initialize the buffer
+            ; in the hopes the problem fixes itself
+            ; (i mean what am i supposed to do, stop the driver? i need the driver.)
+            cli
+                DPUSH [eax + (kbd_driver_scan_buf - GVCT_START)]
+                DDUP
+
+                FCALL RING_TRY_DEQUEUE
+
+                DPOPR eax
+                test eax, eax
+                jz .buf_good
+                cmp eax, 2
+                je .buf_empty
+
+                .buf_error:
+                    DPOP
+                    FCALL RING_REINIT
+                    mov eax, [0x7c20]
+                    jmp .end_dequeue
+
+                .buf_empty:
+                    DPOP
+                    DPOP
+                    jmp .end_dequeue
+
+                .buf_good:
+                    DPOPR edx
+                    DPOP
             sti
 
-            ; basic grammar
-                ; <code> ::= byte
-                ; <ext> ::= 0xe0
-                ; <release> ::= 0xf0
-                ; <key-press> ::= [ <ext> ] <code>
-                ; <key-release> ::= [ <ext> ] <release> <code>
-                ; <key> ::= <key-press> | <key-release>
+            mov eax, [0x7c20]
 
-            ; exceptions:
-                ; pause = 0xe1 0x14 0x77 0xe1 0xf0 0x14 0xf0 0x77
-                ; some keys will have fake pre- and suffixes of
-                ; fake left or right shift key make and break sequences,
-                ; they're easily spotted by the fact that they have a 0xe0
-                ; where the real key does not, so they can be ignored and the real scancode
-                ; forwarded into the keycode table
+            ; ; check if buffer is empty
+            ; cli
+            ;     cmp byte [eax + (sccd_buf_error - GVCT_START)], 0
+            ;     je .no_error
+            ;         ; if any errors, reset the buffer
+            ;         mov dword [eax + (sccd_buf_tail - GVCT_START)], 0
+            ;         mov dword [eax + (sccd_buf_head - GVCT_START)], 0
+            ;         mov byte [eax + (sccd_buf_error - GVCT_START)], 0
+            ;     .no_error:
 
-            ; dequeue scancode into edx
-            and ebx, 255
-            movzx edx, byte [eax + (sccd_buf - GVCT_START) + ebx]
-            inc dword [eax + (sccd_buf_tail - GVCT_START)]
+            ;     mov ebx, [eax + (sccd_buf_tail - GVCT_START)]
+            ;     cmp ebx, [eax + (sccd_buf_head - GVCT_START)]
+            ;     je .end_dequeue
+            ; sti
+
+            ; ; dequeue scancode into edx
+            ; and ebx, 255
+            ; movzx edx, byte [eax + (sccd_buf - GVCT_START) + ebx]
+            ; inc dword [eax + (sccd_buf_tail - GVCT_START)]
 
             ; dispatch to one of the cases based on the state
             movzx ebx, byte [eax + (kbd_driver_state - GVCT_START)]
@@ -764,6 +783,7 @@ START_SECTION IMPL_TABLE
                 movzx ebx, byte [eax + (kbd_driver_consumer_task - GVCT_START)]
                 bts dword [eax + (pending_work - GVCT_START)], ebx
                 jmp .dequeue
+
         .end_dequeue:
         and dword [eax + (pending_work - GVCT_START)], ~(1 << 1) ; clear pending work bit for IRQ 1
         sti
@@ -1109,38 +1129,31 @@ START_SECTION IMPL_TABLE
         in al, 0x60
         movzx ebx, al
 
-        ; load gvct
+        ; set pending work bit for keyboard driver
         mov eax, [0x7c20]
-        or dword [eax + (pending_work - GVCT_START)], 1 << 1 ; set IRQ 1 pending work
+        or dword [eax + (pending_work - GVCT_START)], 1 << 1
 
-        ; if there is already an error in the ring buffer,
-        ; don't enqueue anything more
-        cmp byte [eax + (sccd_buf_error - GVCT_START)], 0
+        ; try to enqueue the scancode
+        mov ecx, [eax + (kbd_driver_scan_buf - GVCT_START)]
+        DPUSH ecx
+        DPUSH ebx
+        DPUSH ecx
+        FCALL RING_TRY_ENQUEUE
+        DPOPR eax
+        cmp eax, 1
         jne .end
 
-        ; check if ring buffer is full, and load the write index into edx
-        mov edx, [eax + (sccd_buf_head - GVCT_START)]
-        mov ecx, edx
-        sub ecx, [eax + (sccd_buf_tail - GVCT_START)]
-        cmp ecx, 256
-        jne .good
-        ; if it is full, give the overflow error and return
-        mov byte [eax + (sccd_buf_error - GVCT_START)], 1
-        jmp .end
+        ; mark overflow
+        .overflow:
+            mov word [esi + 6], 1
 
-        ; enqueue scan code into buffer
-        .good:
-        and edx, 255
-        mov byte [eax + (sccd_buf - GVCT_START) + edx], bl
-        inc dword [eax + (sccd_buf_head - GVCT_START)]
-
+        ; send EOI and return
         .end:
-        ; send EOI
-        mov al, PIC_EOI
-        out mPICc, al
-
-        popad
-        iret
+            DPOP
+            mov al, PIC_EOI
+            out mPICc, al
+            popad
+            iret
     END_IMPL
 
     ; initialize or reinitialize the console, args are the attribute byte to use,
@@ -1568,6 +1581,17 @@ START_SECTION IMPL_TABLE
 
         ; initialize the actual keyboard driver
         mov eax, [0x7c20]
+
+        DPUSH 1
+        DPUSH 256
+        DPUSH eax
+
+        add esi, (scan_buf_offset - GVCT_START)
+        mov [eax + (kbd_driver_scan_buf - GVCT_START)], esi
+
+        FCALL RING_INIT
+
+        ; old initialization
         mov byte [eax + (kbd_driver_state - GVCT_START)], 0
         mov byte [eax + (sccd_buf_error - GVCT_START)], 0
         mov dword [eax + (sccd_buf_head - GVCT_START)], 0
@@ -1585,34 +1609,213 @@ START_SECTION IMPL_TABLE
                         ; use it, then there's no point in keeping the OS running
     END_IMPL
 
-    ; initialize a ring buffer, takes the pointer to the ring buffer struct (must have at least 16 + size bytes of space)
+    ; ring buffer helper functions,
+    ; note that these do not manipulate IF,
+    ; if you're using these on a ring buffer that can
+    ; be modified by ISRs then it's your job to make sure
+    ; interrupts are disabled before calling them
+
+    ; our standardized ring buffer is basically:
+
+    ; typedef ring_buffer_t struct {
+    ;    uint32 capacity; // most is (2^31)-1, must be a power of two
+    ;    uint16 el_size; // 1, 2, or 4
+    ;    uint16 error; // 0 = good, 1 = overflow, 2 = underflow, others are reserved but unused
+    ;    uint32 head;
+    ;    uint32 tail;
+    ;    char[capacity]
+    ; }
+
+    ; initialize a ring buffer, takes the pointer to the ring buffer struct (must have at least 20 + capacity bytes of space)
     ; the requested size in bytes, and the requested element size (1, 2, or 4) in bytes
     IMPL_PRIM RING_INIT, 1
+        DPOPR eax
+        DPOPR ebx
+        DPOPR ecx
+
+        mov [eax], ebx ; capacity
+        mov word [eax + 4], cx ; el_size
+        mov word [eax + 6], 0 ; err
+        mov [eax + 8], 0 ; head
+        mov [eax + 12], 0 ; tail
         ret
     END_IMPL
 
+    ; reinitialize a ring buffer with its existing operand size and capacity, takes the ring buffer
+    IMPL_PRIM RING_REINIT, 1
+        DPOPR eax
+
+        mov word [eax + 6], 0
+        mov [eax + 8], 0 ; head
+        mov [eax + 12], 0 ; tail
+        ret
+    END_IMPL
+
+    ; check if a ring buffer is empty (returns zero for not empty and nonzero for empty), takes the pointer to the ring buffer struct
     IMPL_PRIM RING_ISEMPTY, 1
+        DPOPR eax
+        mov ebx, [eax + 8]
+        cmp ebx, [eax + 12]
+        sete al
+        movzx eax, al
+        DPUSH eax
         ret
     END_IMPL
 
+    ; check if a ring buffer is full (returns zero for not full and nonzero for full), takes the pointer to the ring buffer struct
     IMPL_PRIM RING_ISFULL, 1
+        DPOPR eax
+        mov ebx, [eax]
+        mov ecx, [eax + 8]
+        sub ecx, [eax + 12]
+        cmp ecx, ebx
+        sete al
+        movzx eax, al
+        DPUSH eax
         ret
     END_IMPL
 
+    ; enqueue an item into a ring buffer (use only if you know the buffer has space and didn't error!)
+    ; takes the ring buffer and item
     IMPL_PRIM RING_ENQUEUE, 1
-        ret
+        DPOPR eax
+        DPOPR ebx
+
+        ; load and mask idx
+        mov ecx, [eax + 8]
+        mov edx, [eax]
+        dec edx
+        and ecx, edx
+
+        ; select operand size
+        mov dx, word [eax + 4]
+        cmp dx, 1
+        je .byte
+        cmp dx, 2
+        je .word
+
+        ; enqueue
+        .dword:
+            mov dword [eax + 20 + ecx*4], ebx
+            inc dword [eax + 8]
+            ret
+
+        .word:
+            mov word [eax + 20 + ecx*2], bx
+            inc dword [eax + 8]
+            ret
+
+        .byte:
+            mov byte [eax + 20 + ecx], bl
+            inc dword [eax + 8]
+            ret
     END_IMPL
 
+    ; dequeue an item from a ring buffer (use only if you know the buffer is nonempty and didn't error!)
+    ; takes the ring buffer
     IMPL_PRIM RING_DEQUEUE, 1
-        ret
+        DPOPR eax
+
+        ; load and mask idx
+        mov ecx, [eax + 12]
+        mov edx, [eax]
+        dec edx
+        and ecx, edx
+
+        ; select operand size
+        mov dx, word [eax + 4]
+        cmp dx, 1
+        je .byte
+        cmp dx, 2
+        je .word
+
+        ; enqueue
+        .dword:
+            mov edx, dword [eax + 20 + ecx*4]
+            DPUSH edx
+            inc dword [eax + 12]
+            ret
+
+        .word:
+            movzx edx, word [eax + 20 + ecx*2]
+            DPUSH edx
+            inc dword [eax + 12]
+            ret
+
+        .byte:
+            movzx edx, byte [eax + 20 + ecx]
+            DPUSH edx
+            inc dword [eax + 12]
+            ret
     END_IMPL
 
+    ; safe versions of RING_ENQUEUE and RING_DEQUEUE,
+    ; note that while these functions may *report* errors,
+    ; they do not *set* the error field in a buffer struct,
+    ; this is on purpose so that failing to enqueue something doesn't
+    ; make other tasks think the buffer overflowed or smth
+
+    ; attempt to enqueue an item into a ring buffer, takes the ring buffer and item,
+    ; and returns an error code (0 = good, 1 = overflow, other values are buffer-specific errors)
     IMPL_PRIM RING_TRY_ENQUEUE, 1
+        ; check for prior errors
+        movzx eax, word [esi + 6]
+        test eax, eax
+        jnz .err
+
+        ; check if it's full
+        DDUP
+        FCALL RING_ISFULL
+        DPOPR eax
+        test eax, eax
+        jnz .full
+        ; if not full and no prior errors, enqueue
+        FCALL RING_ENQUEUE
+        DPUSH 0
         ret
+
+        .full:
+            DPOP
+            DPOP
+            DPUSH 1
+            ret
+        .err:
+            DPOP
+            DPOP
+            DPUSH eax
+            ret
     END_IMPL
 
+    ; attempt to dequeue an item from a ring buffer, takes the ring buffer,
+    ; returns an error code (0 = good, 2 = underflow, other values are buffer-specific errors)
+    ; and the item, the "item" is -1 if there was an error
     IMPL_PRIM RING_TRY_DEQUEUE, 1
+        ; check for prior errors
+        movzx eax, word [esi + 6]
+        test eax, eax
+        jnz .err
+
+        ; check if it's full
+        DDUP
+        FCALL RING_ISEMPTY
+        DPOPR eax
+        test eax, eax
+        jnz .empty
+        ; if not empty and no prior errors, dequeue
+        FCALL RING_DEQUEUE
+        DPUSH 0
         ret
+
+        .empty:
+            DPOP
+            DPUSH -1
+            DPUSH 2
+            ret
+        .err:
+            DPOP
+            DPUSH -1
+            DPUSH eax
+            ret
     END_IMPL
 END_SECTION
 
@@ -1652,6 +1855,7 @@ START_SECTION WD_TABLE
 
     ; ring buffers
     WORD_DESC RING_INIT, 0
+    WORD_DESC RING_REINIT, 0
     WORD_DESC RING_ISEMPTY, 0
     WORD_DESC RING_ISFULL, 0
     WORD_DESC RING_ENQUEUE, 0
@@ -1683,6 +1887,7 @@ START_SECTION DICT
     DICT_ENTRY PUTH, "PUTH"
     DICT_ENTRY KEYBOARD_INIT, "KEYBOARD_INIT"
     DICT_ENTRY RING_INIT, "RING_INIT"
+    DICT_ENTRY RING_REINIT, "RING_REINIT"
     DICT_ENTRY RING_ISEMPTY, "RING_ISEMPTY"
     DICT_ENTRY RING_ISFULL, "RING_ISFULL"
     DICT_ENTRY RING_ENQUEUE, "RING_ENQUEUE"
@@ -1695,6 +1900,34 @@ END_SECTION
 START_SECTION GVCT
     here dd HERE_START - GVCT_START ; cursor in the constant table
     latest dd %$LATEST ; latest defined dictionary entry
+
+    kbd_driver_scan_buf dd 0 ; addr of ring buf to get scancodes from
+    kbd_driver_consumer dd 0 ; addr of ring buf to send keycodes to
+    kbd_driver_consumer_task db 0 ; bit index in pending_work of the task to make runnable
+    kbd_driver_state db 0
+
+    ; ring buffer for keyboard scan codes, written to by IRQ 1
+    align 4, db 0
+    scan_buf_offset times 20 + 256 db 0
+
+
+    ; -------------------
+    ; old scancode buffer, being phased out
+    align 4, db 0 ; without this we could get torn writes into head and tail
+    sccd_buf times 256 db 0
+    sccd_buf_head dd 0
+    sccd_buf_tail dd 0
+    ; error code, 0 means fine and 1 means overflow,
+    ; the rest are not currently used
+    sccd_buf_error db 0
+    ; -------------------
+
+    ; ring buffer used by the terminal for receiving keycodes from the keybord driver
+    align 4, db 0
+    key_buf times 256 db 0
+    key_buf_head dd 0
+    key_buf_tail dd 0
+    key_buf_error db 0
 
     ; tick counter, tells us the number of times IRQ 0 fired
     tkc_low dd 0
@@ -1711,9 +1944,9 @@ START_SECTION GVCT
     console_attr db 0 ; attribute byte to use for characters
     console_cursorattr db 0 ; attribute byte to use for the cell the cursor is on
 
+    ; kernel messages
     greeting db "FIF IMG REVISION 1", 13, 10
     greeting_len dd $ - greeting
-
     initmsg db "Initialization complete. Entering main loop.", 13, 10
     initmsg_len dd $ - initmsg
 
@@ -2059,31 +2292,8 @@ START_SECTION GVCT
 
     ; key code state, for each key this can be 0 or 1 representing whether it's pressed
     align 4, db 0
-    kbd_driver_consumer dd 0 ; addr of ring buf to send keycodes to
     kbd_state:
     times 128 / 32 dd 0
-
-    kbd_driver_consumer_task db 0 ; bit index in pending_work of the task to make runnable
-    kbd_driver_state db 0
-
-    ; ring buffer for keyboard scan codes, written to by IRQ 1
-    ; about the implementation, we do the unsigned wraparound
-    ; trick to avoid wasting one slot, and to make some operations
-    ; a little faster
-    align 4, db 0 ; without this we could get torn writes into head and tail
-    sccd_buf times 256 db 0
-    sccd_buf_head dd 0
-    sccd_buf_tail dd 0
-    ; error code, 0 means fine and 1 means overflow,
-    ; the rest are not currently used
-    sccd_buf_error db 0
-
-    ; ring buffer used by the terminal for receiving keycodes from the keybord driver
-    align 4, db 0
-    key_buf times 256 db 0
-    key_buf_head dd 0
-    key_buf_tail dd 0
-    key_buf_error db 0
 
     HERE_START:
 END_SECTION
