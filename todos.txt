@@ -5,8 +5,8 @@ Code cleanups and fixes I've got to get around to sometime:
 
     - Make task set dynamic; should be able to mark a function
       as a task and assign it a bit in the pending work bitmap.
-      (this will be useful in the future for stuff like dynamically
-      loading drivers based on discovered devices too)
+      This will be useful in the future for stuff like dynamically
+      loading drivers based on discovered devices too.
 
     - Make PS/2 controller and keyboard initialization more robust
       by adding timeouts and making the it execute with IRQ 0
@@ -24,9 +24,10 @@ Features to add (in no particular order):
       temporary bootloader-provided stack for everything, and maintain
       separate normal and ISR stacks, as well as avoid putting all the
       structures that happen to be statically allocated into the constant table.
-      (for instance this would avoid having the 500 ring buffers in the kernel image)
+      For instance this would avoid having the 500 ring buffers in the kernel
+      image. (done, arena allocator only for now though)
 
-    - Add a PS/2 mouse driver (in case I'll want console applications in the
+    - Add a PS/2 mouse driver in case I'll want console applications in the
       future, or copy-paste and a window manager, you don't need graphics for
       the mouse to be useful.
 

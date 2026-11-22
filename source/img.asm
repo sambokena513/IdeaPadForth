@@ -443,6 +443,31 @@ START_SECTION IMPL_TABLE
         DPUSH ebx
         FCALL PUTS
 
+        ; print out kernel arena memory
+        mov eax, [0x7c20]
+        mov ebx, [eax + (karena_entry - GVCT_START)]
+
+        DPUSH 10
+        DPUSH 13
+        DPUSH [ebx + 8]
+        add esi, [ebx]
+        DPUSH [ebx + 12]
+        add esi, [ebx + 4]
+        DPUSH '-'
+        DPUSH [ebx]
+        DPUSH [ebx + 4]
+        DPUSH 'x'
+        DPUSH '0'
+        FCALL PUTC
+        FCALL PUTC
+        FCALL PUTH
+        FCALL PUTH
+        FCALL PUTC
+        FCALL PUTH
+        FCALL PUTH
+        FCALL PUTC
+        FCALL PUTC
+
         ; initialize keyboard controller and driver
         FCALL KEYBOARD_INIT
         DPOPR ebx
@@ -653,6 +678,8 @@ START_SECTION IMPL_TABLE
                 dd .case_err  - .get_eip
 
             .case_neutral:
+                cmp edx, 0x00
+                je .dequeue
                 cmp edx, 0xe1
                 je .case_neutral_pause
                 cmp edx, 0xe0
@@ -1942,12 +1969,26 @@ START_SECTION IMPL_TABLE
         .loop:
             cmp ebx, [0x7c04] ; end of smap
             je .end
+
+            ; must be usable ram
             cmp dword [ebx + 16], 1
             jne .skip
+
+            ; must be in 4GB address space
+            cmp [ebx + 4], 0
+            jne .skip
+            cmp [ebx + 12], 0
+            jne .skip
+            mov edx, [ebx]
+            add edx, [ebx + 8]
+            jc .skip
+
+            ; must be of at least the requested length
             cmp dword [ebx + 8], ecx
             jb .skip
 
             .success:
+                mov [ebx + 16], 129
                 mov dword [eax + (karena_entry - GVCT_START)], ebx
                 mov dword [eax + (karena_here - GVCT_START)], 0
                 DPUSH 0

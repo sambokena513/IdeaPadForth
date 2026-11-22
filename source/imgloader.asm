@@ -141,7 +141,7 @@ org 0x8000 ; start just after boot sector
     ; just an arbitrary value I picked since it's slow enough on my processor
     ; that I can read the output of operations as they're done
     %ifndef WAITITER
-        mov eax, 0x004fffff
+        mov eax, 0x008fffff
     %else
         mov eax. WAITITER ; wait time override
     %endif
