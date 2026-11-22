@@ -275,7 +275,7 @@ org 0 ; not actually loaded at 0x00000000, but this gives us simple relative lab
     mov edx, PS2_KBD_MAX_RETRIES
     %%reset:
     cmp edx, 0
-    je .panic
+    je .fail
     PS2_WAIT_IBF
     mov al, %1
     out PS2_DATA, al
@@ -323,6 +323,13 @@ org 0 ; not actually loaded at 0x00000000, but this gives us simple relative lab
 %macro MAP_IDX 2
     times (%1 - ($ - %$map)) db 0
     db %2
+%endmacro
+
+%macro ISR_STACK_PIVOT 0
+    xchg eax, [0x7c20]
+    xchg esp, [eax + (isr_return_stack - GVCT_START)]
+    xchg ebp, [eax + (isr_data_stack - GVCT_START)]
+    xchg eax, [0x7c20]
 %endmacro
 
 ; keyboard driver states
@@ -390,37 +397,43 @@ START_SECTION IMPL_TABLE
         ; attempt to initialize kernel arena, if
         ; we fail here then we just print "OOM",
         ; wait for a bit so the user can see it, and then crash
+        DPUSH 64 * 1024
         FCALL KARENA_INIT
         DPOPR ebx
         mov eax, [0x7c20]
         test ebx, ebx
-        jz .arena_success
-            xor ecx, ecx
-            .arena_fail_cls_iter:
-                cmp ecx, 2000
-                je .arena_fail_cls_end
-                mov byte [0xb8000 + ecx*2], 32
-                inc ecx
-                jmp .arena_fail_cls_iter
-            .arena_fail_cls_end:
+        jnz .fail
 
-            mov byte [0xb8000], 'O'
-            mov byte [0xb8000 + 2], 'O'
-            mov byte [0xb8000 + 4], 'M'
+        ; initialize the core runtime stacks
+        DPUSH 32 * 1024
+        FCALL KRESERVE
+        DPOPR ebx
+        cmp ebx, -1
+        je .fail
 
-            mov ecx, 0xfffff
-            .arena_fail_hang_iter:
-                IO_WAIT
-                loop .arena_fail_hang_iter
+        ; core runtime's data and return stacks
+        mov eax, [0x7c20]
 
-            FCALL PANIC
-        .arena_success:
+        mov ebp, ebx
+        mov [eax + (data_stack_base - GVCT_START)], ebx
+        add ebx, 16 * 1024
+        mov [eax + (return_stack_base - GVCT_START)], ebx
+        mov esp, ebx
+
+        ; interrupt execution context's stacks
+        mov [eax + (isr_data_stack - GVCT_START)], ebx
+        add ebx, 16 * 1024
+        mov [eax + (isr_return_stack - GVCT_START)], ebx
+
 
         ; initialize terminal
         DPUSH 40 - ((greeting_len - greeting) / 2) ; our greeting message should appear in the top-middle
         DPUSH 0x17 ; cursor attr
         DPUSH 0x07 ; attribute byte
         FCALL CONSOLE_INIT
+        DPOPR ebx
+        test ebx, ebx
+        jnz .fail
 
         ; print greeting message
         mov eax, [0x7c20]
@@ -432,6 +445,9 @@ START_SECTION IMPL_TABLE
 
         ; initialize keyboard controller and driver
         FCALL KEYBOARD_INIT
+        DPOPR ebx
+        test ebx, ebx
+        jnz .fail
 
         ; initialize interrupt subsystem so we can bind service routines
         FCALL INT_INIT
@@ -476,6 +492,11 @@ START_SECTION IMPL_TABLE
 
         ; finally, enter the main loop
         FCALL KMAIN
+
+        ; go here if any of the initial driver init routines
+        ; or core runtime allocations fail
+        .fail:
+            FCALL PANIC
     END_IMPL
 
     ; main loop
@@ -645,7 +666,8 @@ START_SECTION IMPL_TABLE
                     jz .case_err
 
                     ; alter keyboard state
-                    bts dword [eax + (kbd_state - GVCT_START)], edx
+                    mov ebx, [eax + (kbd_driver_kbd_state - GVCT_START)]
+                    bts dword [ebx], edx
 
                     call near .emit_keycode
                     jmp .dequeue
@@ -676,7 +698,8 @@ START_SECTION IMPL_TABLE
                     jz .case_err
 
                     ; alter keyboard state
-                    bts dword [eax + (kbd_state - GVCT_START)], edx
+                    mov ebx, [eax + (kbd_driver_kbd_state - GVCT_START)]
+                    bts dword [ebx], edx
 
                     call near .emit_keycode
                     mov byte [eax + (kbd_driver_state - GVCT_START)], KBD_DRVR_NEUTRAL
@@ -697,7 +720,8 @@ START_SECTION IMPL_TABLE
                 jz .case_err
 
                 ; alter keyboard state
-                btr dword [eax + (kbd_state - GVCT_START)], edx
+                mov ebx, [eax + (kbd_driver_kbd_state - GVCT_START)]
+                btr dword [ebx], edx
 
                 or edx, 1 << 7 ; mark as key release
                 call near .emit_keycode
@@ -716,7 +740,8 @@ START_SECTION IMPL_TABLE
                     jz .case_err
 
                     ; alter keyboard state
-                    btr dword [eax + (kbd_state - GVCT_START)], edx
+                    mov ebx, [eax + (kbd_driver_kbd_state - GVCT_START)]
+                    btr dword [ebx], edx
 
                     or edx, 1 << 7 ; mark as key release
                     call near .emit_keycode
@@ -871,10 +896,11 @@ START_SECTION IMPL_TABLE
                 sti
 
                 ; reset keyboard state
-                mov dword [eax + (kbd_state - GVCT_START)], 0
-                mov dword [eax + (kbd_state - GVCT_START) + 4], 0
-                mov dword [eax + (kbd_state - GVCT_START) + 8], 0
-                mov dword [eax + (kbd_state - GVCT_START) + 12], 0
+                mov ebx, [eax + (kbd_driver_kbd_state - GVCT_START)]
+                mov dword [ebx], 0
+                mov dword [ebx + 4], 0
+                mov dword [ebx + 8], 0
+                mov dword [ebx + 12], 0
                 jmp .end
 
             .dequeued:
@@ -883,10 +909,11 @@ START_SECTION IMPL_TABLE
             test ebx, (1 << 7)
             jnz .loop
 
+            mov edx, [eax + (kbd_driver_kbd_state - GVCT_START)]
             ; check if shift and/or altgr are pressed
-            test dword [eax + (kbd_state - GVCT_START) + (0x0e / 32 * 4)], 1 << (0x0e % 32) ; left shift
+            test dword [edx + (0x0e / 32 * 4)], 1 << (0x0e % 32) ; left shift
             setnz cl
-            test dword [eax + (kbd_state - GVCT_START) + (0x57 / 32 * 4)], 1 << (0x57 % 32) ; right alt
+            test dword [edx + (0x57 / 32 * 4)], 1 << (0x57 % 32) ; right alt
             setnz ch
 
             cmp cx, (1 << 0 | 1 << 8)
@@ -1133,11 +1160,13 @@ START_SECTION IMPL_TABLE
 
     ; irq 0 handler, increments a tick counter
     IMPL_PRIM TIMER_INT, 1
+        ; switch to interrupt execution context
+        ISR_STACK_PIVOT
         pushad
-        add ebp, 4096
+
+        mov eax, [0x7c20]
 
         ; increment 64-bit tick counter
-        mov eax, [0x7c20]
         or dword [eax + (pending_work - GVCT_START)], 1 << 0 ; set IRQ 0 pending work
 
         add dword [eax + (tkc_low - GVCT_START)], 1
@@ -1148,13 +1177,14 @@ START_SECTION IMPL_TABLE
         out mPICc, al
 
         popad
+        ISR_STACK_PIVOT
         iret
     END_IMPL
 
     ; irq 1 handler, currently just reads the scan code, the plan is to enqueue it into a ring buffer
     IMPL_PRIM KEYBOARD_INT, 1
+        ISR_STACK_PIVOT
         pushad
-        add ebp, 4096
 
         ; read scan code into ebx
         in al, 0x60
@@ -1183,7 +1213,9 @@ START_SECTION IMPL_TABLE
             DPOP
             mov al, PIC_EOI
             out mPICc, al
+
             popad
+            ISR_STACK_PIVOT
             iret
     END_IMPL
 
@@ -1223,14 +1255,25 @@ START_SECTION IMPL_TABLE
         ; mark the terminal as the keycode consumer and initialize key buf
         DPUSH 1
         DPUSH 256
-        DPUSH (key_buf_offset - GVCT_START)
-        add esi, eax
+        DPUSH 256 + 20
+        FCALL KRESERVE
+        cmp esi, -1
+        je .fail
 
         mov dword [eax + (kbd_driver_key_buf - GVCT_START)], esi
         mov byte [eax + (kbd_driver_consumer_task - GVCT_START)], 2
 
         FCALL RING_INIT
+        DPUSH 0
         ret
+
+        .fail:
+            DPOP
+            DPOP
+            DPOP
+
+            DPUSH -1
+            ret
     END_IMPL
 
     ; clear the screen
@@ -1539,7 +1582,7 @@ START_SECTION IMPL_TABLE
         PS2_WAIT_OBF
         in al, PS2_DATA
         cmp al, PS2_SELFTEST_PASSED
-        jne .panic
+        jne .fail
 
         ; restore config since the self-test may reset it
         ; this time enable the clock so that devices work
@@ -1558,7 +1601,7 @@ START_SECTION IMPL_TABLE
         PS2_WAIT_OBF
         in al, PS2_DATA
         test al, al
-        jnz .panic
+        jnz .fail
 
         ; enable IRQs now that we're finishing up initialization
         ; (you may think, but you never disabled them, surely they'd still be enabled?
@@ -1592,7 +1635,7 @@ START_SECTION IMPL_TABLE
         PS2_WAIT_OBF
         in al, PS2_DATA
         cmp al, PS2_KBD_SELFTEST_PASSED
-        jne .panic
+        jne .fail
 
         ; why do we not explicitly set scancode set 2?
         ; because doing so would actually *decrease*
@@ -1609,27 +1652,44 @@ START_SECTION IMPL_TABLE
         PS2_WAIT_IBF ; don't return before the final command has been processed
 
         ; initialize the actual keyboard driver
-        mov eax, [0x7c20]
 
-        mov dword [eax + (kbd_state - GVCT_START)], 0
-        mov dword [eax + (kbd_state - GVCT_START) + 4], 0
-        mov dword [eax + (kbd_state - GVCT_START) + 8], 0
-        mov dword [eax + (kbd_state - GVCT_START) + 12], 0
-
+        ; ring buffer init
         DPUSH 1
         DPUSH 256
-        DPUSH eax
-
-        add esi, (scan_buf_offset - GVCT_START)
+        DPUSH 256 + 20
+        FCALL KRESERVE
+        cmp esi, -1
+        jne .success_ring_alloc
+            DPOP
+            DPOP
+            DPOP
+            jmp .fail
+        .success_ring_alloc:
+        mov eax, [0x7c20]
         mov [eax + (kbd_driver_scan_buf - GVCT_START)], esi
-
         FCALL RING_INIT
+
+        ; keyboard state init
+        DPUSH (128 / 32) * 4
+        FCALL KRESERVE
+        DPOPR ebx
+        cmp ebx, -1
+        je .fail
+
+        mov eax, [0x7c20]
+        mov [eax + (kbd_driver_kbd_state - GVCT_START)], ebx
+
+        mov dword [ebx], 0
+        mov dword [ebx + 4], 0
+        mov dword [ebx + 8], 0
+        mov dword [ebx + 12], 0
+
+        DPUSH 0
         ret
 
-        .panic:
-            FCALL PANIC ; reasoning: this is an interactive OS with currently no input methods
-                        ; other than the keyboard, so if we cannot properly initialize it and
-                        ; use it, then there's no point in keeping the OS running
+        .fail:
+            DPUSH -1
+            ret
     END_IMPL
 
     ; ring buffer helper functions,
@@ -1842,26 +1902,75 @@ START_SECTION IMPL_TABLE
     END_IMPL
 
     ; allocate from kernel arena, note that allocations made with this are always 4-byte aligned,
-    ; and can never be freed, we return -1 for allocation failure, otherwise the allocated memory
+    ; and can never be freed, we return -1 for allocation failure, otherwise a pointer to the allocated memory
+    IMPL_PRIM KRESERVE, 1
+        DPOPR ebx ; amount to alloc
 
-    ; (why does it exist then? to make booting faster by avoiding a large GVCT
-    ; filled with zeroes being loaded from disk just to hold a couple of ring
-    ; buffers or other runtime data, and to make it more configurable for
-    ; low-memory systems since while allocations here are permanent, due to
-    ; them being decided at runtime you can just choose not to load a driver
-    ; for instance to prevent it from allocating for its data structures)
+        mov eax, [0x7c20]
+        mov edx, [eax + (karena_entry - GVCT_START)] ; e820 entry
+        mov ecx, [eax + (karena_here - GVCT_START)] ; arena allocation index
 
-    IMPL_PRIM KALLOT, 1
-        DPUSH -1 ; placeholder
+        ; if the new index'd be out of bounds, fail
+        add ebx, ecx
+        cmp ebx, dword [edx + 8]
+        ja .fail
+
+        ; save updated idx, and return the previous idx + base,
+        ; if the address overflows, abort and fail
+        .success:
+        add ecx, [edx]
+        jc .fail
+        mov [eax + (karena_here - GVCT_START)], ebx
+
+        DPUSH ecx
+        ret
+
+        .fail:
+        DPUSH -1
         ret
     END_IMPL
 
     ; initialize kernel arena, takes requested minimum size
-    ; finds the smallest e820 entry in the memory map,
+    ; finds the smallest e820 entry of type 1 in the memory map of at least that size,
     ; and overwrites its type with 129 (KARENA) as well as captures a pointer
     ; to it, returns 0 on success and -1 on failure
     IMPL_PRIM KARENA_INIT, 1
-        DPUSH 0 ; placeholder
+        DPOPR ecx ; length
+        mov eax, [0x7c20]
+
+        mov ebx, [0x7c00] ; start of smap
+        .loop:
+            cmp ebx, [0x7c04] ; end of smap
+            je .end
+            cmp dword [ebx + 16], 1
+            jne .skip
+            cmp dword [ebx + 8], ecx
+            jb .skip
+
+            .success:
+                mov dword [eax + (karena_entry - GVCT_START)], ebx
+                mov dword [eax + (karena_here - GVCT_START)], 0
+                DPUSH 0
+                ret
+
+            .skip:
+            add ebx, 20
+            jmp .loop
+
+        .end:
+            DPUSH -1
+            ret
+    END_IMPL
+
+    ; reset kernel arena, takes no arguments and has no return value,
+    ; after the call to this function all memory previously allocated
+    ; with KRESERVE is rendered *invalid*, and the arena allocation pointer
+    ; is reset to 0, making KRESERVE calls once more capable of succeeding
+    IMPL_PRIM KARENA_REINIT, 1
+        ; tiny impl, but it's worth it to make this a function
+        ; just because it makes the intent clearer
+        mov eax, [0x7c20]
+        mov [eax + (karena_here - GVCT_START)], 0
         ret
     END_IMPL
 END_SECTION
@@ -1911,8 +2020,9 @@ START_SECTION WD_TABLE
     WORD_DESC RING_TRY_DEQUEUE, 0
 
     ; kernel arena
-    WORD_DESC KALLOT, 0
+    WORD_DESC KRESERVE, 0
     WORD_DESC KARENA_INIT, 0
+    WORD_DESC KARENA_REINIT, 0
 END_SECTION
 
 ; dictionary
@@ -1945,35 +2055,37 @@ START_SECTION DICT
     DICT_ENTRY RING_DEQUEUE, "RING_DEQUEUE"
     DICT_ENTRY RING_TRY_ENQUEUE, "RING_TRY_ENQUEUE"
     DICT_ENTRY RING_TRY_DEQUEUE, "RING_TRY_DEQUEUE"
-    DICT_ENTRY KALLOT, "KALLOT"
+    DICT_ENTRY KRESERVE, "KRESERVE"
     DICT_ENTRY KARENA_INIT, "KARENA_INIT"
+    DICT_ENTRY KARENA_REINIT, "KARENA_REINIT"
 END_SECTION
 
 ; global-variable & constant table
 START_SECTION GVCT
-    here dd HERE_START - GVCT_START ; cursor in the constant table
-    latest dd %$LATEST ; latest defined dictionary entry
+    karena_entry dd 0 ; address of memory-map entry containing kernel arena
+    karena_here dd 0 ; offset from start of arena that new allocations start at
 
-    kbd_driver_scan_buf dd 0 ; addr of ring buf to get scancodes from
-    kbd_driver_key_buf dd 0 ; addr of ring buf to send keycodes to
-    kbd_driver_consumer_task db 0 ; bit index in pending_work of the task to make runnable
-    kbd_driver_state db 0
-
-    ; ring buffer for keyboard scan codes, written to by IRQ 1
-    align 4, db 0
-    scan_buf_offset times 20 + 256 db 0
-
-    ; ring buffer used by the terminal for receiving keycodes from the keyboard driver
-    align 4, db 0
-    key_buf_offset times 20 + 256 db 0
+    ; main runtime stacks
+    return_stack_base dd 0
+    data_stack_base dd 0
+    ; ISR stacks
+    isr_return_stack dd 0
+    isr_data_stack dd 0
 
     ; tick counter, tells us the number of times IRQ 0 fired
     tkc_low dd 0
     tkc_high dd 0
 
+    here dd HERE_START - GVCT_START ; cursor in the constant table
+    latest dd %$LATEST ; latest defined dictionary entry
+
+    kbd_driver_scan_buf dd 0 ; addr of ring buf to get scancodes from
+    kbd_driver_key_buf dd 0 ; addr of ring buf to send keycodes to
+    kbd_driver_kbd_state dd 0 ; addr of bitmap containing keyboard state
+    kbd_driver_consumer_task db 0 ; bit index in pending_work of the task to make runnable
+    kbd_driver_state db 0
+
     ; bitmap that represents runnable tasks,
-    ; ISRs set bits here, and the deferred handlers
-    ; clear them,
     ; the superloop in KMAIN invokes the respective handlers
     pending_work dd 0
 
@@ -2327,11 +2439,6 @@ START_SECTION GVCT
         db `\0\0\0\0` ; 0x7d: pause (special)
         db `\0\0\0\0` ; 0x7e: break (special)
         db `\0\0\0\0` ; 0x7f: sysrq (special)
-
-    ; key code state, for each key this can be 0 or 1 representing whether it's pressed
-    align 4, db 0
-    kbd_state:
-    times 128 / 32 dd 0
 
     HERE_START:
 END_SECTION

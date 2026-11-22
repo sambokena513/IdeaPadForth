@@ -1275,20 +1275,8 @@ crc_check:
 
 parse_image:
     ; parse image header and read sections
-
     lstr eax, `Parsing and loading image.\r\n`
     call bios_puts32
-
-    ; mark memory map location in runtime header
-    movzx eax, byte [e820_arr_len]
-    mov ebx, eax
-    shl eax, 4
-    shl ebx, 2
-    add eax, ebx
-    add eax, e820_arr
-
-    mov dword [0x7c00], e820_arr
-    mov dword [0x7c04], eax
 
     ; edi gets the amount of sections,
     ; and esi gets the address of the first section descriptor
@@ -1356,6 +1344,19 @@ parse_image:
     mov edx, entry_compare
     call sort
 
+    ; mark memory map location in runtime header,
+    ; do this after the image loading because balloc can change the count
+    movzx eax, byte [e820_arr_len]
+    mov ebx, eax
+    shl eax, 4
+    shl ebx, 2
+    add eax, ebx
+    add eax, e820_arr
+
+    mov dword [0x7c00], e820_arr
+    mov dword [0x7c04], eax
+
+    ; print smap one last time
     lstr eax, `Printing final memory map.\r\n`
     call bios_puts32
     call print_mmap
