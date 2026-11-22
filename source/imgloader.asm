@@ -772,10 +772,10 @@ entry_compare:
     mov ebx, [eax]
     mov ecx, [eax + 4]
 
-    cmp ebx, [eax + 20]
+    cmp ecx, [eax + 4 + 20]
     ja .greater
     jb .smaller
-    cmp ecx, [eax + 4 + 20]
+    cmp ebx, [eax + 20]
     ja .greater
     jb .smaller
 
