@@ -10,14 +10,21 @@ Code cleanups and fixes I've got to get around to sometime:
 
     - Make PS/2 controller and keyboard initialization more robust
       by adding timeouts and making the it execute with IRQ 0
-      unmasked and IF = 1
+      unmasked and IF = 1 (in progress, I fixed a race condition but it
+      still doesn't have timeouts)
 
     - Clean up ring buffer implementations to all go through a centralized
       abstraction, it may be a little slower but it's really in the spirt of
       forth to keep each function small, no need for every driver to reinvent
-      the FIFO queue.
+      the FIFO queue. (done)
 
 Features to add (in no particular order):
+
+    - Add at the very least an arena allocator so that I can stop using the
+      temporary bootloader-provided stack for everything, and maintain
+      separate normal and ISR stacks, as well as avoid putting all the
+      structures that happen to be statically allocated into the constant table.
+      (for instance this would avoid having the 500 ring buffers in the kernel image)
 
     - Add a PS/2 mouse driver (in case I'll want console applications in the
       future, or copy-paste and a window manager, you don't need graphics for
@@ -29,3 +36,9 @@ Features to add (in no particular order):
       needing to type the whole thing in each time.
 
     - Add terminal input so we can make something like INTERPRET eventually.
+
+    - Redo terminal and console drivers to make it cleaner and be able to
+      handle things like translating characters (lf becomes crlf for instance),
+      and be able to support copy-paste as well as mouse selections, as well
+      as actually have line-buffering be optional so that apps requiring raw
+      input don't have to deal with line semantics.

@@ -387,6 +387,35 @@ START_SECTION IMPL_TABLE
         mov fs, ax
         mov gs, ax
 
+        ; attempt to initialize kernel arena, if
+        ; we fail here then we just print "OOM",
+        ; wait for a bit so the user can see it, and then crash
+        FCALL KARENA_INIT
+        DPOPR ebx
+        mov eax, [0x7c20]
+        test ebx, ebx
+        jz .arena_success
+            xor ecx, ecx
+            .arena_fail_cls_iter:
+                cmp ecx, 2000
+                je .arena_fail_cls_end
+                mov byte [0xb8000 + ecx*2], 32
+                inc ecx
+                jmp .arena_fail_cls_iter
+            .arena_fail_cls_end:
+
+            mov byte [0xb8000], 'O'
+            mov byte [0xb8000 + 2], 'O'
+            mov byte [0xb8000 + 4], 'M'
+
+            mov ecx, 0xfffff
+            .arena_fail_hang_iter:
+                IO_WAIT
+                loop .arena_fail_hang_iter
+
+            FCALL PANIC
+        .arena_success:
+
         ; initialize terminal
         DPUSH 40 - ((greeting_len - greeting) / 2) ; our greeting message should appear in the top-middle
         DPUSH 0x17 ; cursor attr
@@ -935,14 +964,16 @@ START_SECTION IMPL_TABLE
     ; to be used in case of unrecoverable errors, this function will:
         ; disable interrupts (so that nothing can stop it)
         ; fill the screen with the repeating strings "PANIC" and "!!!!!"
-        ; hang (at this point you should probably reboot)
+        ; hang for a short time (so the user can notice what happened
+        ; finally, induce a triple-fault to reboot
     IMPL_PRIM PANIC, 1
         cli
 
+        ; make it *very* noticeable that the kernel crashed
         xor ecx, ecx
         .loop:
             cmp ecx, 2000
-            je .hang
+            je .end_loop
 
             mov word [0xb8000 + ecx*2 + 0*2], 'P' | (0x47 << 8)
             mov word [0xb8000 + ecx*2 + 1*2], 'A' | (0x17 << 8)
@@ -958,10 +989,21 @@ START_SECTION IMPL_TABLE
 
             add ecx, 10
             jmp .loop
+        .end_loop:
 
+        ; hang for a short time
+        mov ecx, 0xfffff
         .hang:
+            IO_WAIT
+            loop .hang
+
+        ; triple-fault
+        int 0xff
+
+        ; in case somehow we didn't triple-fault
+        .hang_but_for_real:
             hlt
-            jmp .hang
+            jmp .hang_but_for_real
     END_IMPL
 
     ; initialize IDT, IDeT, PICs, and switch floating point errors to native mode,
@@ -1798,6 +1840,30 @@ START_SECTION IMPL_TABLE
             DPUSH eax
             ret
     END_IMPL
+
+    ; allocate from kernel arena, note that allocations made with this are always 4-byte aligned,
+    ; and can never be freed, we return -1 for allocation failure, otherwise the allocated memory
+
+    ; (why does it exist then? to make booting faster by avoiding a large GVCT
+    ; filled with zeroes being loaded from disk just to hold a couple of ring
+    ; buffers or other runtime data, and to make it more configurable for
+    ; low-memory systems since while allocations here are permanent, due to
+    ; them being decided at runtime you can just choose not to load a driver
+    ; for instance to prevent it from allocating for its data structures)
+
+    IMPL_PRIM KALLOT, 1
+        DPUSH -1 ; placeholder
+        ret
+    END_IMPL
+
+    ; initialize kernel arena, takes requested minimum size
+    ; finds the smallest e820 entry in the memory map,
+    ; and overwrites its type with 129 (KARENA) as well as captures a pointer
+    ; to it, returns 0 on success and -1 on failure
+    IMPL_PRIM KARENA_INIT, 1
+        DPUSH 0 ; placeholder
+        ret
+    END_IMPL
 END_SECTION
 
 ; word descriptor table
@@ -1843,6 +1909,10 @@ START_SECTION WD_TABLE
     WORD_DESC RING_DEQUEUE, 0
     WORD_DESC RING_TRY_ENQUEUE, 0
     WORD_DESC RING_TRY_DEQUEUE, 0
+
+    ; kernel arena
+    WORD_DESC KALLOT, 0
+    WORD_DESC KARENA_INIT, 0
 END_SECTION
 
 ; dictionary
@@ -1875,6 +1945,8 @@ START_SECTION DICT
     DICT_ENTRY RING_DEQUEUE, "RING_DEQUEUE"
     DICT_ENTRY RING_TRY_ENQUEUE, "RING_TRY_ENQUEUE"
     DICT_ENTRY RING_TRY_DEQUEUE, "RING_TRY_DEQUEUE"
+    DICT_ENTRY KALLOT, "KALLOT"
+    DICT_ENTRY KARENA_INIT, "KARENA_INIT"
 END_SECTION
 
 ; global-variable & constant table
