@@ -1287,11 +1287,6 @@ START_SECTION IMPL_TABLE
         ret
     END_IMPL
 
-    ; note, for now ISRs operate inside the same stack as the normal runtime,
-    ; just with a large offset, this is a temporary measure, once I have a physical
-    ; memory allocator I will use that at boot-time to reserve memory for separate runtime
-    ; and interrupt stacks
-
     ; irq 0 handler, increments a tick counter
     IMPL_PRIM TIMER_INT, 1
         ; switch to interrupt execution context
