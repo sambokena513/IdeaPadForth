@@ -1936,8 +1936,8 @@ START_SECTION IMPL_TABLE
             ret
     END_IMPL
 
-    ; allocate from kernel arena, note that allocations made with this are always 4-byte aligned,
-    ; and can never be freed, we return -1 for allocation failure, otherwise a pointer to the allocated memory
+    ; allocate from kernel arena, note that allocations made with this can never be freed
+    ; we return -1 for allocation failure, otherwise a pointer to the allocated memory
     IMPL_PRIM KRESERVE, 1
         DPOPR ebx ; amount to alloc
 

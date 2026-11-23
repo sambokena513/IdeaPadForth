@@ -377,7 +377,8 @@ OS Architecture (so far, this section is subject to change):
         + a buddy allocator, and perhaps a slower specialized allocator for getting
         memory suitable for ISA device drivers.
 
-        Drivers - Currently drivers are not dynamically loaded, we simply have
+        Drivers - Currently drivers are not dynamically loaded and neither are
+        devices dynamically discovered, we simply have
         a few tasks in our bitmap for background stuff, we have a PS/2 keyboard, VGA
         text console and very basic terminal driver, these are in the process of being
         reworked to provide a cleaner interface that doesn't depend on the specific
@@ -415,6 +416,15 @@ OS Architecture (so far, this section is subject to change):
                 - get a character from terminal input, returning an 8-bit
                   ASCII value, if no characters are available, return 0
 
+            term_scroll(uint8 direction)
+                - Scroll one line upwards or downwards, depending on terminal
+                  implementation may or may not re-display text that
+                  previously scrolled off the screen, direction should be 0
+                  for scrolling upwards, or -1 for scrolling downwards.
+                  If the terminal does not implement scrollback, or the user
+                  scrolled too far and the text is no longer in memory, fill
+                  the removed line with ASCII 32 characters.
+
             term_reset()
                 - reset cursor position, attributes, clear the screen,
                   and clear buffers
@@ -434,7 +444,8 @@ OS Architecture (so far, this section is subject to change):
             term_set_term(uint32 terminal)
                 - set which terminal the above operations should operate on,
                   as all of them implicitly operate on the idea of a "current
-                  terminal"
+                  terminal", this operation however is not itself part *of*
+                  the terminal, but rather global or per-task state.
 
             XLATE - When this setting is enabled, nonprintable characters
                     in putc and puts will be translated into longer sequences
@@ -456,3 +467,20 @@ OS Architecture (so far, this section is subject to change):
                   producing DEL) are interpreted by the terminal emulator for
                   line and screen editing instead of being sent to the
                   application.
+
+            Note that all of these functions are called indirectly through a
+            terminal struct, this struct must contain *at least* these fields
+            and in this order:
+
+                struct {
+                    uint32 putc;
+                    uint32 puts;
+                    uint32 getc;
+                    uint32 scroll;
+                    uint32 reset;
+                    uint32 get_attr;
+                    uint32 set_attr;
+                }
+
+            However each implementation is free to add its own extra fields
+            for internal state.
