@@ -42,12 +42,17 @@ Features to add (in no particular order):
       needing to type the whole thing in each time.
 
     - Add terminal input so we can make something like INTERPRET eventually.
+      (done, added cooked input, no raw for now, but this should be enough to
+      implement a basic shell)
 
     - Redo terminal and console drivers to make it cleaner and be able to
       handle things like translating characters (lf becomes crlf for instance),
       and be able to support copy-paste as well as mouse selections, as well
       as actually have line-buffering be optional so that apps requiring raw
       input don't have to deal with line semantics.
+
+    - Later on after memory allocation and drivers are a bit better, make a
+      proper scheduler.
 
 Major architecture features / subsystems to implement:
 
