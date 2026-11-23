@@ -81,3 +81,10 @@ Major architecture features / subsystems to implement:
       What then is the buddy allocator for if in practice we allocate one page
       at a time? The answer is for acquiring physically contiguous memory
       larger than 4KB. (mainly for device drivers)
+
+      Finally, it doesn't need to support PAE immediately, but we should avoid
+      writing anything that depends on PAE not being implemented, this means
+      we need to treat addresses as being 8-byte structs, thankfully though
+      this doesn't mean we literally need to juggle these large structs in the
+      buddy allocator or page frame allocator, those can work with PHYS / 4096,
+      or in other words, the page frame number rather than the address.
