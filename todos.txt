@@ -18,6 +18,11 @@ Code cleanups and fixes I've got to get around to sometime:
       forth to keep each function small, no need for every driver to reinvent
       the FIFO queue. (done)
 
+    - Slight change to the ring buffers, make the buffer not stored inline
+      in the struct, but rather keep a pointer to it, this lets you more
+      efficiently manage awkwardly-sized data structures once we move over to
+      a buddy allocator + slab allocator pair for dynamic memory management.
+
 Features to add (in no particular order):
 
     - Add at the very least an arena allocator so that I can stop using the
@@ -43,3 +48,36 @@ Features to add (in no particular order):
       and be able to support copy-paste as well as mouse selections, as well
       as actually have line-buffering be optional so that apps requiring raw
       input don't have to deal with line semantics.
+
+Major architecture features / subsystems to implement:
+
+    - Memory management. The plan is essentially an architecture split into
+      physical and virtual memory management subsystems, where the physical
+      memory manager is a buddy allocator + a page allocator backed by the
+      buddy allocator, and the virtual memory manager can be the usual thing
+      relatively similar to an extent allocator.
+
+      More specifically, we have an array of memory region descriptors,
+      and each memory region is an array of page descriptors, the buddy
+      allocator allocates by going through regions until it finds one that can
+      satisfy the allocation, then doing the normal algorithm on that of
+      either grabbing an exact fit, or splitting the larger blocks. As for
+      freeing, given a page's physical address we first find the region
+      containing it, and after that the expression
+            `(PHYS_ADDR - REGION_START) / PAGE_SIZE + REGION_START`
+      will give us the address of its metadata, or
+            `((PHYS_ADDR XOR BLOCK_SIZE) - REGION_START) / PAGE_SIZE + REGION_START`
+      for its buddy.
+
+      Then for virtual memory, we maintain an AVL tree of virtual memory
+      regions, a virtual memory region has metadata such as its start, end,
+      and type.
+
+      Our vm_mkregion() can create a new region (doesn't need to map any pages
+      yet or allocate memory), vm_delregion() can tear one down (must unmap
+      all pages). Then on page faults we check "is this page in a virtual
+      region?", and if yes, we map it.
+
+      What then is the buddy allocator for if in practice we allocate one page
+      at a time? The answer is for acquiring physically contiguous memory
+      larger than 4KB. (mainly for device drivers)
