@@ -1310,7 +1310,7 @@ START_SECTION IMPL_TABLE
         iret
     END_IMPL
 
-    ; irq 1 handler, currently just reads the scan code, the plan is to enqueue it into a ring buffer
+    ; irq 1 handler
     IMPL_PRIM KEYBOARD_INT, 1
         ISR_STACK_PIVOT
         pushad
