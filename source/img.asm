@@ -394,9 +394,7 @@ START_SECTION IMPL_TABLE
         mov fs, ax
         mov gs, ax
 
-        ; attempt to initialize kernel arena, if
-        ; we fail here then we just print "OOM",
-        ; wait for a bit so the user can see it, and then crash
+        ; attempt to initialize kernel arena
         DPUSH 64 * 1024
         FCALL KARENA_INIT
         DPOPR ebx
@@ -425,12 +423,17 @@ START_SECTION IMPL_TABLE
         add ebx, 16 * 1024
         mov [eax + (isr_return_stack - GVCT_START)], ebx
 
-
-        ; initialize terminal
+        ; initialize console
         DPUSH 40 - ((greeting_len - greeting) / 2) ; our greeting message should appear in the top-middle
         DPUSH 0x17 ; cursor attr
         DPUSH 0x07 ; attribute byte
         FCALL CONSOLE_INIT
+        DPOPR ebx
+        test ebx, ebx
+        jnz .fail
+
+        ; initialize terminal
+        FCALL TERMINAL_INIT
         DPOPR ebx
         test ebx, ebx
         jnz .fail
@@ -515,6 +518,9 @@ START_SECTION IMPL_TABLE
         DPUSH ebx
         FCALL PUTS
 
+        ; initialize command interpreter
+        FCALL SHELL_INIT
+
         ; finally, enter the main loop
         FCALL KMAIN
 
@@ -571,6 +577,20 @@ START_SECTION IMPL_TABLE
             DPOPR ebx
             DPOPR eax
             .skip_2:
+
+            test dword [eax + (pending_work - GVCT_START)], 1 << 3
+            jz .skip_3
+
+            DPUSH eax
+            DPUSH ebx
+            DPUSH ecx
+            DPUSH edx
+            FCALL SHELL
+            DPOPR edx
+            DPOPR ecx
+            DPOPR ebx
+            DPOPR eax
+            .skip_3:
 
             .end:
             cli
@@ -975,43 +995,130 @@ START_SECTION IMPL_TABLE
 
                 cmp ebx, 8 ; keycodes mapped to backspace produce "\b \b" instead
                 je .backspace
-                cmp ebx, 10 ; keycoes mapped to newline produce crlf instead
+                cmp ebx, 10 ; keycodes mapped to newline produce crlf instead
                 je .newline
 
-                ; echo key
-                DPUSH ebx
-                FCALL PUTC
+                ; add character to buffer and print
+                call near .emit_char
 
-                ; todo: actually add the key to some form of line buffer
                 jmp .loop
 
-            ; handle unmapped key, for this we just print '^?' to the screen
+            ; handle unmapped key, these we treat as equivalent to '^?'
             .unmapped:
-                DPUSH '?'
-                DPUSH '^'
-                FCALL PUTC
-                FCALL PUTC
+                mov ebx, '^'
+                call near .emit_char
+                mov ebx, '?'
+                call near .emit_char
 
-                ; todo: add these fake characters to the line buffer
                 jmp .loop
 
             .newline:
+                ; wake whatever is waiting on the terminal
+                movzx ebx, byte [eax + (terminal_cbuf_consumer - GVCT_START)]
+                bts dword [eax + (pending_work - GVCT_START)], ebx
+
+                ; add newline to buffer
+                DPUSH 10
+                DPUSH dword [eax + (terminal_cbuf - GVCT_START)]
+                FCALL RING_TRY_ENQUEUE
+                DPOPR ecx
+
+                mov eax, [0x7c20]
+
+                test ecx, ecx
+                jnz .loop
+
+                ; submit line by making it visible to applications
+                mov ebx, [eax + (terminal_cbuf - GVCT_START)]
+                mov ecx, [ebx + 8]
+                mov [eax + (terminal_cbuf_rlimit - GVCT_START)], ecx
+
+                ; display the new line
                 FCALL TERM_CR
                 FCALL TERM_LN
-
-                ; todo: add these fake characters to the line buffer
                 jmp .loop
 
             .backspace:
+                ; if we are already at the start of the line, do nothing
+                mov ebx, [eax + (terminal_cbuf - GVCT_START)]
+                mov ecx, [ebx + 8]
+                cmp ecx, [eax + (terminal_cbuf_rlimit - GVCT_START)]
+                je .loop
+
+                ; decrement the write index
+                dec dword [ebx + 8]
+
                 FCALL TERM_BACKSPACE
                 DPUSH 32
                 FCALL PUTC
                 FCALL TERM_BACKSPACE
-
-                ; todo, once line buffering exists this should also remove a character from the buffer
                 jmp .loop
+
         .end:
-        and dword [eax + (pending_work - GVCT_START)], ~(1 << 2) ; clear pending work for terminal
+            and dword [eax + (pending_work - GVCT_START)], ~(1 << 2) ; clear pending work for terminal
+            ret
+
+        ; helper for attempting to enqueue and print a character, assumes character is in ebx
+        .emit_char:
+            ; in case a line was just submitted with no space left
+            DPUSH ebx
+            DPUSH dword [eax + (terminal_cbuf - GVCT_START)]
+            FCALL RING_ISFULL
+            DPOPR ecx
+            DPOPR ebx
+            mov eax, [0x7c20]
+            test ecx, ecx
+            jz .emit_char_try
+                ; wake whatever is waiting on the terminal since it *clearly*
+                ; has some issues if the whole line buffer filled up *with*
+                ; available data to read
+                movzx ebx, byte [eax + (terminal_cbuf_consumer - GVCT_START)]
+                bts dword [eax + (pending_work - GVCT_START)], ebx
+                ret
+
+            .emit_char_try:
+            mov edx, [eax + (terminal_cbuf - GVCT_START)]
+            dec dword [edx + 12] ; so we keep one extra char of space
+
+            ; try to enqueue
+            DPUSH ebx
+            DDUP
+            DPUSH edx
+            FCALL RING_TRY_ENQUEUE
+            DPOPR ecx
+            DPOPR ebx
+
+            test ecx, ecx
+            jnz .emit_char_nospace
+
+            .emit_char_good:
+                DPUSH ebx
+                FCALL PUTC
+
+            .emit_char_nospace:
+                ; undo the decrement
+                mov eax, [0x7c20]
+                mov edx, [eax + (terminal_cbuf - GVCT_START)]
+                inc dword [edx + 12]
+                ret
+    END_IMPL
+
+    ; process commands (placeholder at the moment, just prints character codes)
+    IMPL_PRIM SHELL, 1
+        .loop:
+            FCALL GETC
+            DPOPR eax
+            test eax, eax
+            jz .end
+
+            DPUSH eax
+            FCALL PUTC
+
+            jmp .loop
+
+        .end:
+        mov eax, [0x7c20]
+        and dword [eax + (pending_work - GVCT_START)], ~(1 << 3)
         ret
     END_IMPL
 
@@ -1246,7 +1353,7 @@ START_SECTION IMPL_TABLE
             iret
     END_IMPL
 
-    ; initialize or reinitialize the console, args are the attribute byte to use,
+    ; initialize the console, args are the attribute byte to use,
     ; attribute byte to use for the cursor, and initial software cursor position
     IMPL_PRIM CONSOLE_INIT, 1
         ; disable hardware cursor since we don't use it
@@ -1279,10 +1386,24 @@ START_SECTION IMPL_TABLE
         mov word [eax + (console_cursor - GVCT_START)], bx
         mov byte [0xb8001 + ebx * 2], cl ; display cursor
 
+        DPUSH 0
+        ret
+    END_IMPL
+
+    IMPL_PRIM RENDER_GLYPH, 1
+        ; placeholder, later terminal should stop caring about
+        ; console implementation and instead use this to render characters
+        ; at x,y coordinates in a virtual console
+        ret
+    END_IMPL
+
+    ; initialize terminal, takes no arguments and returns -1 on error or 0
+    ; on success
+    IMPL_PRIM TERMINAL_INIT, 1
         ; mark the terminal as the keycode consumer and initialize key buf
         DPUSH 1
         DPUSH 256
-        DPUSH 256 + 20
+        DPUSH 256 + 16
         FCALL KRESERVE
         cmp esi, -1
         je .fail
@@ -1291,6 +1412,19 @@ START_SECTION IMPL_TABLE
         mov byte [eax + (kbd_driver_consumer_task - GVCT_START)], 2
 
         FCALL RING_INIT
+
+        DPUSH 1
+        DPUSH 256
+        DPUSH 256 + 16
+        FCALL KRESERVE
+        cmp esi, -1
+        je .fail
+
+        mov dword [eax + (terminal_cbuf - GVCT_START)], esi
+        mov dword [eax + (terminal_cbuf_rlimit - GVCT_START)], 0
+
+        FCALL RING_INIT
+
         DPUSH 0
         ret
 
@@ -1301,14 +1435,6 @@ START_SECTION IMPL_TABLE
 
             DPUSH -1
             ret
-    END_IMPL
-
-    IMPL_PRIM RENDER_GLYPH, 1
-        ret
-    END_IMPL
-
-    IMPL_PRIM TERMINAL_INIT, 1
-        ret
     END_IMPL
 
     ; clear the screen
@@ -1491,6 +1617,7 @@ START_SECTION IMPL_TABLE
 
         ; escape sequences
         .ln:
+            FCALL TERM_CR
             FCALL TERM_LN
             DPOP
             ret
@@ -1555,6 +1682,44 @@ START_SECTION IMPL_TABLE
             dec ecx
             jnz .loop
         DPOP
+        ret
+    END_IMPL
+
+    ; get a character from the terminal, returns either the character, or 0 for no character
+    IMPL_PRIM GETC, 1
+        mov eax, [0x7c20]
+
+        ; temporarily swap write idx with the read limit to avoid reading lines that haven't
+        ; been submitted, save the original write idx on the stack
+        mov ebx, [eax + (terminal_cbuf - GVCT_START)]
+        DPUSH dword [ebx + 8]
+        mov ecx, [eax + (terminal_cbuf_rlimit - GVCT_START)]
+        mov [ebx + 8], ecx
+
+        DPUSH ebx
+        DPUSH ebx
+        FCALL RING_TRY_DEQUEUE
+        DPOPR ecx ; err
+        DPOPR edx ; val
+        DPOPR ebx ; ring buf
+        DPOPR eax ; original write idx
+        mov [ebx + 8], eax ; writeback original write idx
+
+        ; check if we got input
+        test ecx, ecx
+        jnz .no_input
+
+        DPUSH edx
+        ret
+
+        .no_input:
+            DPUSH 0
+            ret
+    END_IMPL
+
+    IMPL_PRIM SHELL_INIT, 1
+        mov eax, [0x7c20]
+        mov byte [eax + (terminal_cbuf_consumer - GVCT_START)], 3 ; we are task 3
         ret
     END_IMPL
 
@@ -1691,7 +1856,7 @@ START_SECTION IMPL_TABLE
         ; ring buffer init
         DPUSH 1
         DPUSH 256
-        DPUSH 256 + 20
+        DPUSH 256 + 16
         FCALL KRESERVE
         cmp esi, -1
         jne .success_ring_alloc
@@ -1744,7 +1909,7 @@ START_SECTION IMPL_TABLE
     ;    char[capacity]
     ; }
 
-    ; initialize a ring buffer, takes the pointer to the ring buffer struct (must have at least 20 + capacity bytes of space)
+    ; initialize a ring buffer, takes the pointer to the ring buffer struct (must have at least 16 + capacity bytes of space)
     ; the requested size in bytes, and the requested element size (1, 2, or 4) in bytes
     IMPL_PRIM RING_INIT, 1
         DPOPR eax
@@ -1814,17 +1979,17 @@ START_SECTION IMPL_TABLE
 
         ; enqueue
         .dword:
-            mov dword [eax + 20 + ecx*4], ebx
+            mov dword [eax + 16 + ecx*4], ebx
             inc dword [eax + 8]
             ret
 
         .word:
-            mov word [eax + 20 + ecx*2], bx
+            mov word [eax + 16 + ecx*2], bx
             inc dword [eax + 8]
             ret
 
         .byte:
-            mov byte [eax + 20 + ecx], bl
+            mov byte [eax + 16 + ecx], bl
             inc dword [eax + 8]
             ret
     END_IMPL
@@ -1849,19 +2014,19 @@ START_SECTION IMPL_TABLE
 
         ; enqueue
         .dword:
-            mov edx, dword [eax + 20 + ecx*4]
+            mov edx, dword [eax + 16 + ecx*4]
             DPUSH edx
             inc dword [eax + 12]
             ret
 
         .word:
-            movzx edx, word [eax + 20 + ecx*2]
+            movzx edx, word [eax + 16 + ecx*2]
             DPUSH edx
             inc dword [eax + 12]
             ret
 
         .byte:
-            movzx edx, byte [eax + 20 + ecx]
+            movzx edx, byte [eax + 16 + ecx]
             DPUSH edx
             inc dword [eax + 12]
             ret
@@ -1898,6 +2063,8 @@ START_SECTION IMPL_TABLE
             DPUSH 1
             ret
         .err:
+            FCALL PANIC
+
             DPOP
             DPOP
             DPUSH eax
@@ -2030,10 +2197,13 @@ START_SECTION WD_TABLE
     WORD_DESC INIT, 0
     WORD_DESC KMAIN, 0
 
-    ; drivers/tasks
+    ; drivers
     WORD_DESC TIMER_HOOK, 0
     WORD_DESC KEYBOARD_DRIVER, 0
     WORD_DESC TERMINAL_DRIVER, 0
+
+    ; other tasks
+    WORD_DESC SHELL, 0
 
     ; error handling
     WORD_DESC PANIC, 0
@@ -2059,6 +2229,11 @@ START_SECTION WD_TABLE
     WORD_DESC PUTC, 0
     WORD_DESC PUTS, 0
     WORD_DESC PUTH, 0
+
+    WORD_DESC GETC, 0
+
+    ; command line
+    WORD_DESC SHELL_INIT, 0
 
     ; keyboard
     WORD_DESC KEYBOARD_INIT, 0
@@ -2086,6 +2261,7 @@ START_SECTION DICT
     DICT_ENTRY TIMER_HOOK, "TIMER_HOOK"
     DICT_ENTRY KEYBOARD_DRIVER, "KEYBOARD_DRIVER"
     DICT_ENTRY TERMINAL_DRIVER, "TERMINAL_DRIVER"
+    DICT_ENTRY SHELL, "SHELL"
     DICT_ENTRY PANIC, "PANIC"
     DICT_ENTRY INT_INIT, "INT_INIT"
     DICT_ENTRY SET_INT, "SET_INT"
@@ -2102,6 +2278,8 @@ START_SECTION DICT
     DICT_ENTRY PUTC, "PUTC"
     DICT_ENTRY PUTS, "PUTS"
     DICT_ENTRY PUTH, "PUTH"
+    DICT_ENTRY GETC, "GETC"
+    DICT_ENTRY SHELL_INIT, "SHELL_INIT"
     DICT_ENTRY KEYBOARD_INIT, "KEYBOARD_INIT"
     DICT_ENTRY RING_INIT, "RING_INIT"
     DICT_ENTRY RING_REINIT, "RING_REINIT"
@@ -2149,6 +2327,10 @@ START_SECTION GVCT
     console_cursor dw 0 ; current position in VGA text buffer
     console_attr db 0 ; attribute byte to use for characters
     console_cursorattr db 0 ; attribute byte to use for the cell the cursor is on
+
+    terminal_cbuf dd 0 ; input buffer for characters
+    terminal_cbuf_rlimit dd 0 ; terminal_cbuf ring buffer's head as visible to applications
+    terminal_cbuf_consumer db 0 ; bit index to set when terminal data becomes available
 
     ; kernel messages
     greeting db "FIF IMG REVISION 1", 13, 10
@@ -2430,7 +2612,7 @@ START_SECTION GVCT
         db `=+\0\0` ; 0x3c: =
         db `\0\0\0\0` ; 0x3d: CapsLock
         db `\0\0\0\0` ; 0x3e: right shift
-        db `\n\r\0\0` ; 0x3f: enter
+        db `\n\0\0\0` ; 0x3f: enter
         db `]}\0\0` ; 0x40: ]
         db `\\|\0\0` ; 0x41: backslash
         db `\b\0\0\0` ; 0x42: backspace
