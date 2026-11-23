@@ -351,3 +351,108 @@ Image Loading:
           table.
         - set up data and return stacks
         - Jump to image entry point.
+
+OS Architecture (so far, this section is subject to change):
+
+    Execution:
+
+        The system is essentially an embedded-style superloop at the moment, there
+        are hardcoded "tasks" in a bitmap which can have pending work or be suspended, tasks
+        and ISRs can set these bits, and the superloop checks the bits to invoke the
+        corresponding function. The bitmap is represented as a 32-bit machine
+        integer, if the integer is 0 we know there is no work, and can halt the CPU.
+
+    Subsystems:
+
+        Interrupts - We currently use the 8259 PIC to handle interrupts, on
+        top of the normal IDT to maintain our expected late-binding Forth
+        semantics we have an "IDeT" or Interrupt Descriptor Extension Table,
+        this maps interrupt vectors to word descriptors letting us invoke the
+        right handler even if is is redefined.
+
+        Memory management - At the moment you cannot free memory, we have a
+        small kernel arena (64KB) initialized once at bootup that drivers can allocate
+        from on initialization for their data structures, such as various ring
+        buffers. The planned physical memory manager is a free stack of pages
+        + a buddy allocator, and perhaps a slower specialized allocator for getting
+        memory suitable for ISA device drivers.
+
+        Drivers - Currently drivers are not dynamically loaded, we simply have
+        a few tasks in our bitmap for background stuff, we have a PS/2 keyboard, VGA
+        text console and very basic terminal driver, these are in the process of being
+        reworked to provide a cleaner interface that doesn't depend on the specific
+        console implementation. Planned API for console:
+
+            console_render_glyph(uint32 console, uint32 x, uint32 y, uint8 glyph, uint8 attributes)
+                - render an ASCII glyph on <console> at <x,y>, if <glyph>
+                  is not a printable ASCII character, behaviour is undefined.
+                  Returns 0 on success or -1 on failure (such as invalid
+                  coordinates or if it's backed by a graphics driver, graphics
+                  problem). Finally, the <attributes> argument determines the
+                  background and foreground color of the displayed glyph,
+                  this is a VGA attribute byte, even if the console is not a
+                  VGA text console, it must accept VGA-style attribute bytes
+                  for colors.
+
+            console_query_size(uint32 console)
+                - obtain the range of valid x and y coordinates for a given
+                  console.
+
+            console_cls(uint32 console)
+                - clear the screen, equivalent to calling render_glyph() on
+                  on every character cell with ASCII 32 as the glyph, but more
+                  performant. Same as render_glyph(), returns error code.
+
+        And for the terminal driver:
+
+            term_putc(uint32 character)
+                - print a character to the screen
+
+            term_puts(uint32 string)
+                - print a string to the screen
+
+            term_getc()
+                - get a character from terminal input, returning an 8-bit
+                  ASCII value, if no characters are available, return 0
+
+            term_reset()
+                - reset cursor position, attributes, clear the screen,
+                  and clear buffers
+
+            term_get_attr()
+                - returns a 32-bit bitmap where each bit corresponds to
+                  whether one setting is enabled or disabled.
+                  current settings are bit 0 = XLATE, bit 1 = ECHO,
+                  and bit 2 = RAW. Additionally, the latter 16 bit half of the
+                  attributes is not a bitmap, but rather contains the colors
+                  (represented as VGA attribute bytes) for normal and
+                  highlighted text respectively.
+
+            term_set_attr(uint32 attr)
+                - write an attribute bitmap back to the terminal
+
+            term_set_term(uint32 terminal)
+                - set which terminal the above operations should operate on,
+                  as all of them implicitly operate on the idea of a "current
+                  terminal"
+
+            XLATE - When this setting is enabled, nonprintable characters
+                    in putc and puts will be translated into longer sequences
+                    to provide expected behaviour. For instance, \b becomes
+                    \b, space, \b. And \n becomes \r\n, this also affects
+                    echoed characters from the keyboard.
+
+            ECHO - When this setting is enabled, characters received from the
+                   keyboard are printed before making them available to the
+                   application, when it is disabled, typing produces no
+                   visible output automatically.
+
+            RAW - When this setting is enabled, all characters go directly to
+                  the application immediately, and control characters coming
+                  from the keyboard are not processed (such as DEL), when it
+                  is *disabled*, then characters are buffered into a line sepa
+                  rately from the application-visible input buffer, and
+                  certain keys producing control characters (such as backspace
+                  producing DEL) are interpreted by the terminal emulator for
+                  line and screen editing instead of being sent to the
+                  application.
