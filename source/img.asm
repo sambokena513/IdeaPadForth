@@ -980,6 +980,12 @@ START_SECTION IMPL_TABLE
             jnz .loop
 
             mov edx, [eax + (kbd_driver_kbd_state - GVCT_START)]
+
+            ; if sysrq is pressed, perform its special semantics rather than a normal keypress
+            ; TODO: eventually make sysrq handling a separate driver *between* the keyboard and terminal layer
+            test dword [edx + (0x7f / 32 * 4)], 1 << (0x7f % 32)
+            jnz .sysrq
+
             ; check if shift and/or altgr are pressed
             test dword [edx + (0x0e / 32 * 4)], 1 << (0x0e % 32) ; left shift
             setnz cl
@@ -1009,6 +1015,30 @@ START_SECTION IMPL_TABLE
             .shift:
                 movzx ebx, byte [eax + (char_map - GVCT_START) + ebx*4 + 1]
                 jmp .handle_key
+
+            .sysrq:
+                cmp ebx, 0x17 ; C keycode
+                je .sysrq_crash
+                cmp ebx,  0x21 ; R keycode
+                je .sysrq_reset
+
+                pushad
+                DPUSH ebx
+                FCALL PUTH
+                popad
+
+                jmp .loop
+
+            ; clear the screen
+            .sysrq_reset:
+                FCALL CLS
+                jmp .loop
+
+            ; crash the OS by causing the watchdog timer to run out
+            .sysrq_crash:
+                sti
+                hlt
+                jmp .sysrq_crash
 
             .handle_key:
                 test ebx, ebx
