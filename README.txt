@@ -382,119 +382,161 @@ OS Architecture (so far, this section is subject to change):
         a few tasks in our bitmap for background stuff, we have a PS/2 keyboard, VGA
         text console and very basic terminal driver, these are in the process of being
         reworked to provide a cleaner interface that doesn't depend on the specific
-        console implementation. Planned API for console:
+        console implementation.
 
-            console_render_glyph(uint32 console, uint32 x, uint32 y, uint8 glyph, uint8 attributes)
-                - render an ASCII glyph on <console> at <x,y>, if <glyph>
-                  is not a printable ASCII character, behaviour is undefined.
-                  Returns 0 on success or -1 on failure (such as invalid
-                  coordinates or if it's backed by a graphics driver, graphics
-                  problem). Finally, the <attributes> argument determines the
-                  background and foreground color of the displayed glyph,
-                  this is a VGA attribute byte, even if the console is not a
-                  VGA text console, it must accept VGA-style attribute bytes
-                  for colors.
+        Planned architecture for the input and display subsystem:
 
-            console_query_size(uint32 console)
-                - obtain the range of valid x and y coordinates for a given
-                  console.
+            Layer 0 - Drivers: the keyboard and mouse drivers generate input events
+                and send them to a configured primary input receiver, also known as the "input
+                router"
 
-            console_cls(uint32 console)
-                - clear the screen, equivalent to calling render_glyph() on
-                  on every character cell with ASCII 32 as the glyph, but more
-                  performant. Same as render_glyph(), returns error code.
+            Layer 1 - IO Router: the IO Router manages both window compositing, as
+                well as which application is "focused", and which virtual screen is
+                visible. It handles the alt+<number> shortcut for switching virtual
+                terminals, and the super+<number> shortcut for switching viewports.
 
-        And for the terminal driver:
+            Layer 2 - Consoles: A virtual console presents a clean logical character-cell
+                rendering interface for terminals or other applications to use for
+                displaying things, consoles are implemented by keeping track of a few
+                important pieces of state inside an array of x * y length, this array
+                contains character cell descriptor structs of the format:
 
-            term_putc(uint32 character)
-                - print a character to the screen
+                    - bit 31 - a flag for if this character cell is dirty
+                    - bits 30..16 - a 15-bit offset from 0xb8000 of the physical
+                      character cell this logical character cell describes
+                    - bits 15..0  - current glyph and attribute byte of character cell
 
-            term_puts(uint32 string)
-                - print a string to the screen
+                Additionally, a console also needs to provide this struct for
+                applications and the compositor to be able to use it:
 
-            term_getc()
-                - get a character from terminal input, returning an 8-bit
-                  ASCII value, if no characters are available, return 0
+                    struct {
+                        // required by terminals
+                        uint32 render_glyph;
+                        uint32 query_size;
+                        uint32 cls;
 
-            term_scroll(uint8 direction)
-                - Scroll one line upwards or downwards, depending on terminal
-                  implementation may or may not re-display text that
-                  previously scrolled off the screen, direction should be 0
-                  for scrolling upwards, or -1 for scrolling downwards.
-                  If the terminal does not implement scrollback, or the user
-                  scrolled too far and the text is no longer in memory, fill
-                  the removed line with ASCII 32 characters.
+                        // these are required for the compositor
+                        uint32 displayed;
+                        uint32 cell_buf;
+                        uint16 line_count;
+                        uint16 line_length
+                    }
 
-            term_reset()
-                - reset cursor position, attributes, clear the screen,
-                  and clear buffers
+                When a console is being displayed (the `displayed` field is set to
+                -1), rendering operations should update the stored glyph and
+                attribute, but also follow the VGA mapping to display memory and
+                actually display the character, when it is not displayed, then it
+                should still write to its internal buffer, but instead of displaying,
+                it should set the `dirty` bit for character cells it touches, the
+                compositor will display these when the console is eventually displayed again.
 
-            term_get_attr()
-                - returns a 32-bit bitmap where each bit corresponds to
-                  whether one setting is enabled or disabled.
-                  current settings are bit 0 = XLATE, bit 1 = ECHO,
-                  and bit 2 = RAW. Additionally, the latter 16 bit half of the
-                  attributes is not a bitmap, but rather contains the colors
-                  (represented as VGA attribute bytes) for normal and
-                  highlighted text respectively.
+                Application-facing API:
 
-            term_set_attr(uint32 attr)
-                - write an attribute bitmap back to the terminal
+                    console_render_glyph(uint32 console, uint32 x, uint32 y, uint8 glyph, uint8 attributes)
+                        - render an ASCII glyph on <console> at <x,y>, if <glyph>
+                          is not a printable ASCII character, behaviour is undefined.
+                          Returns 0 on success or -1 on failure (such as invalid
+                          coordinates or if it's backed by a graphics driver, graphics
+                          problem). Finally, the <attributes> argument determines the
+                          background and foreground color of the displayed glyph,
+                          this is a VGA attribute byte, even if the console is not a
+                          VGA text console, it must accept VGA-style attribute bytes
+                          for colors.
 
-            term_set_term(uint32 terminal)
-                - set which terminal the above operations should operate on,
-                  as all of them implicitly operate on the idea of a "current
-                  terminal", this operation however is not itself part *of*
-                  the terminal, but rather global or per-task state.
+                    console_query_size(uint32 console)
+                        - obtain the range of valid x and y coordinates for a given
+                          console.
 
-            XLATE - When this setting is enabled, nonprintable characters
-                    in putc and puts will be translated into longer sequences
-                    to provide expected behaviour. For instance, \b becomes
-                    \b, space, \b. And \n becomes \r\n, this also affects
-                    echoed characters from the keyboard.
+                    console_cls(uint32 console)
+                        - clear the screen, equivalent to calling render_glyph() on
+                          on every character cell with ASCII 32 as the glyph, but more
+                          performant. Same as render_glyph(), returns error code.
 
-            ECHO - When this setting is enabled, characters received from the
-                   keyboard are printed before making them available to the
-                   application, when it is disabled, typing produces no
-                   visible output automatically.
 
-            RAW - When this setting is enabled, all characters go directly to
-                  the application immediately, and control characters coming
-                  from the keyboard are not processed (such as DEL), when it
-                  is *disabled*, then characters are buffered into a line sepa
-                  rately from the application-visible input buffer, and
-                  certain keys producing control characters (such as backspace
-                  producing DEL) are interpreted by the terminal emulator for
-                  line and screen editing instead of being sent to the
-                  application.
+            Layer 3 - Terminals: virtual terminals are backed by consoles, and provide
+                a familiar command-line-like interface for most applications, of
+                course an application can also directly mark *itself* as being the "terminal"
+                and then simply choose not to implement terminal functionality, but instead
+                directly manage its console (such as graphical text-mode applications that
+                want to make use of the mouse and widgets)
 
-            Note that all of these functions are called indirectly through a
-            terminal struct, this struct must contain *at least* these fields
-            and in this order:
+                Application-facing API:
 
-                struct {
-                    uint32 putc;
-                    uint32 puts;
-                    uint32 getc;
-                    uint32 scroll;
-                    uint32 reset;
-                    uint32 get_attr;
-                    uint32 set_attr;
-                }
+                    term_putc(uint32 character)
+                        - print a character to the screen
 
-            However each implementation is free to add its own extra fields
-            for internal state.
+                    term_puts(uint32 string)
+                        - print a string to the screen
 
-        Additionally, there should be a concept of a "virtual screen" or
-        viewport, which determines which consoles are actually displayed,
-        and which terminal is active. The plan here is to simply make the
-        virtual screen manager the direct consumer of keyboard input rather
-        than the terminal, and have it route input to the active terminal, and
-        route output to the active virtual screen, as well as likely process
-        system requests.
+                    term_getc()
+                        - get a character from terminal input, returning an 8-bit
+                          ASCII value, if no characters are available, return 0
 
-        The initial implementation can simply be VGA page switching to switch
-        viewports, and an intermediate ring buffer that captures input and
-        forwards it to the active terminal, it should recognize sequences like
-        alt+<term-number>, and super+<viewport-number> for switching which
-        terminal receives input, and what is displayed respectively.
+                    term_scroll(uint8 direction)
+                        - Scroll one line upwards or downwards, depending on terminal
+                          implementation may or may not re-display text that
+                          previously scrolled off the screen, direction should be 0
+                          for scrolling upwards, or -1 for scrolling downwards.
+                          If the terminal does not implement scrollback, or the user
+                          scrolled too far and the text is no longer in memory, fill
+                          the removed line with ASCII 32 characters.
+
+                    term_reset()
+                        - reset cursor position, attributes, clear the screen,
+                          and clear buffers
+
+                    term_get_attr()
+                        - returns a 32-bit bitmap where each bit corresponds to
+                          whether one setting is enabled or disabled.
+                          current settings are bit 0 = XLATE, bit 1 = ECHO,
+                          and bit 2 = RAW. Additionally, the latter 16 bit half of the
+                          attributes is not a bitmap, but rather contains the colors
+                          (represented as VGA attribute bytes) for normal and
+                          highlighted text respectively.
+
+                    term_set_attr(uint32 attr)
+                        - write an attribute bitmap back to the terminal
+
+                    term_set_term(uint32 terminal)
+                        - set which terminal the above operations should operate on,
+                          as all of them implicitly operate on the idea of a "current
+                          terminal", this operation however is not itself part *of*
+                          the terminal, but rather global or per-task state.
+
+                    XLATE - When this setting is enabled, nonprintable characters
+                            in putc and puts will be translated into longer sequences
+                            to provide expected behaviour. For instance, \b becomes
+                            \b, space, \b. And \n becomes \r\n, this also affects
+                            echoed characters from the keyboard.
+
+                    ECHO - When this setting is enabled, characters received from the
+                           keyboard are printed before making them available to the
+                           application, when it is disabled, typing produces no
+                           visible output automatically.
+
+                    RAW - When this setting is enabled, all characters go directly to
+                          the application immediately, and control characters coming
+                          from the keyboard are not processed (such as DEL), when it
+                          is *disabled*, then characters are buffered into a line sepa
+                          rately from the application-visible input buffer, and
+                          certain keys producing control characters (such as backspace
+                          producing DEL) are interpreted by the terminal emulator for
+                          line and screen editing instead of being sent to the
+                          application.
+
+                    Note that all of these functions are called indirectly through a
+                    terminal struct, this struct must contain *at least* these fields
+                    and in this order:
+
+                        struct {
+                            uint32 putc;
+                            uint32 puts;
+                            uint32 getc;
+                            uint32 scroll;
+                            uint32 reset;
+                            uint32 get_attr;
+                            uint32 set_attr;
+                        }
+
+                    However each implementation is free to add its own extra fields
+                    for internal state.
