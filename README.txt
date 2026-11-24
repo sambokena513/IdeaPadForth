@@ -469,8 +469,10 @@ OS Architecture (so far, this section is subject to change):
                         - print a string to the screen
 
                     term_getc()
-                        - get a character from terminal input, returning an 8-bit
-                          ASCII value, if no characters are available, return 0
+                        - get a character from terminal input, returning a 32-bit
+                          value, if no characters are available, this is -1,
+                          otherwise only the bottom 8 bits are significant,
+                          and correspond to an ASCII character.
 
                     term_scroll(uint8 direction)
                         - Scroll one line upwards or downwards, depending on terminal

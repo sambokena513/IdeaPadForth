@@ -1129,8 +1129,8 @@ START_SECTION IMPL_TABLE
         .loop:
             FCALL GETC
             DPOPR eax
-            test eax, eax
-            jz .end
+            cmp eax, -1
+            je .end
 
             DPUSH eax
             FCALL PUTC
@@ -1765,7 +1765,7 @@ START_SECTION IMPL_TABLE
         ret
 
         .no_input:
-            DPUSH 0
+            DPUSH -1
             ret
     END_IMPL
 
