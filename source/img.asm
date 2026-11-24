@@ -613,16 +613,37 @@ START_SECTION IMPL_TABLE
     ; serving as a kind of OS "heartbeat" so you know if it actually stalled or is just waiting
     IMPL_PRIM TIMER_HOOK, 1
         mov eax, [0x7c20]
+
+        ; load tick counter
+        cli
+            mov ebx, [eax + (tkc_high_prev - GVCT_START)]
+            mov ecx, [eax + (tkc_low_prev - GVCT_START)]
+        sti
+
+        ; loop until our tick counter matches the real one
         .loop:
             cli
-                test dword [eax + (pending_work - GVCT_START)], 1 << 0
-                jz .end
+                cmp ebx, [eax + (tkc_high - GVCT_START)]
+                jne .work
+                cmp ecx, [eax + (tkc_low - GVCT_START)]
+                je .end
+
+                .work:
             sti
 
+            add ecx, 1
+            adc ebx, 0
+
             inc word [0xb8000 + 79*2]
-            and dword [eax + (pending_work - GVCT_START)], ~(1 << 0)
+
             jmp .loop
         .end:
+
+        ; writeback new timestamp, and return
+        mov [eax + (tkc_high_prev - GVCT_START)], ebx
+        mov [eax + (tkc_low_prev - GVCT_START)], ecx
+
+        and dword [eax + (pending_work - GVCT_START)], ~(1 << 0)
         sti
         ret
     END_IMPL
@@ -1122,11 +1143,29 @@ START_SECTION IMPL_TABLE
         ret
     END_IMPL
 
-    ; to be used in case of unrecoverable errors, this function will:
-        ; disable interrupts (so that nothing can stop it)
-        ; fill the screen with the repeating strings "PANIC" and "!!!!!"
-        ; hang for a short time (so the user can notice what happened
-        ; finally, induce a triple-fault to reboot
+    ; the panic functions, organized by severity:
+        ; OOPS - A fatal error where the runtime still mostly works,
+        ; can use the normal terminal and drivers to output a configurable crash message
+        ; and maybe write logs to disk or serial output, etc.
+
+        ; STRESS - A fatal error where drivers can no longer be trusted,
+        ; initializes a minimal emergency console, prints a message, and reboots
+
+        ; PANIC - A fatal error where nothing can be trusted, tries to write a recognizable
+        ; repeating pattern to VGA memory in the hopes of informing the user that there was
+        ; a problem, and then reboots
+
+    ; failures in these functions can escalate to the next level, but never deescalate
+    ; currently only the highest-level PANIC is implemented
+
+    IMPL_PRIM OOPS, 1
+        ret
+    END_IMPL
+
+    IMPL_PRIM STRESS, 1
+        ret
+    END_IMPL
+
     IMPL_PRIM PANIC, 1
         cli
 
@@ -1287,7 +1326,8 @@ START_SECTION IMPL_TABLE
         ret
     END_IMPL
 
-    ; irq 0 handler, increments a tick counter
+    ; irq 0 handler, increments a tick counter,
+    ; also acts as a basic watchdog
     IMPL_PRIM TIMER_INT, 1
         ; switch to interrupt execution context
         ISR_STACK_PIVOT
@@ -1301,6 +1341,20 @@ START_SECTION IMPL_TABLE
         add dword [eax + (tkc_low - GVCT_START)], 1
         adc dword [eax + (tkc_high - GVCT_START)], 0
 
+        ; check for kernel lockup and panic if it happens
+        mov ecx, [eax + (tkc_low - GVCT_START)]
+        mov ebx, [eax + (tkc_high - GVCT_START)]
+        sub ecx, [eax + (tkc_low_prev - GVCT_START)]
+        sbb ebx, [eax + (tkc_high_prev - GVCT_START)]
+
+        ; if difference between OS and real tick counter is 200 or more ticks (10 seconds)
+        ; then panic
+        test ebx, ebx
+        jnz .lockup
+        cmp ecx, 200
+        jae .lockup
+
+        .good:
         ; end of interrupt
         mov al, PIC_EOI
         out mPICc, al
@@ -1308,6 +1362,9 @@ START_SECTION IMPL_TABLE
         popad
         ISR_STACK_PIVOT
         iret
+
+        .lockup:
+            FCALL PANIC
     END_IMPL
 
     ; irq 1 handler
@@ -2302,9 +2359,17 @@ START_SECTION GVCT
     isr_return_stack dd 0
     isr_data_stack dd 0
 
-    ; tick counter, tells us the number of times IRQ 0 fired
+    ; tick counter, tells us the number of times IRQ 0 fired,
     tkc_low dd 0
     tkc_high dd 0
+
+    ; saved by TIMER_HOOK, used to decide how many iterations of TIMER_HOOK to run,
+    ; also used to detect soft lockups (we have no way currently of detecting hard lockups)
+    ; if this is more than 200 *lower* than the real tick counter, we can assume the OS locked up,
+    ; since 200 ticks at 20Hz is 10 seconds this timer should never be an issue unless a real lockup happens.
+    ; and if a task needs extra time it can manually give this a kick occasionally
+    tkc_low_prev dd 0
+    tkc_high_prev dd 0
 
     here dd HERE_START - GVCT_START ; cursor in the constant table
     latest dd %$LATEST ; latest defined dictionary entry
