@@ -401,9 +401,10 @@ OS Architecture (so far, this section is subject to change):
                 important pieces of state inside an array of x * y length, this array
                 contains character cell descriptor structs of the format:
 
-                    - bit 31 - a flag for if this character cell is dirty
-                    - bits 30..16 - a 15-bit offset from 0xb8000 of the physical
+                    - bit 31 - dirty flag, aka "does this cell"
+                    - bits 30..17 - a 14-bit offset from 0xb8000 of the physical
                       character cell this logical character cell describes
+                    - bit 16 - is this cell displayed at the moment?
                     - bits 15..0  - current glyph and attribute byte of character cell
 
                 Additionally, a console also needs to provide this struct for
@@ -416,19 +417,17 @@ OS Architecture (so far, this section is subject to change):
                         uint32 cls;
 
                         // these are required for the compositor
-                        uint32 displayed;
                         uint32 cell_buf;
                         uint16 line_count;
                         uint16 line_length
                     }
 
-                When a console is being displayed (the `displayed` field is set to
-                -1), rendering operations should update the stored glyph and
-                attribute, but also follow the VGA mapping to display memory and
-                actually display the character, when it is not displayed, then it
-                should still write to its internal buffer, but instead of displaying,
-                it should set the `dirty` bit for character cells it touches, the
-                compositor will display these when the console is eventually displayed again.
+                When a rendering operation is performed, the console must
+                check the compositor-managed `displayed` bit in the character
+                cell descriptor, if it is set, it may write to VGA memory,
+                else it must set the `dirty` flag for any cells it writes to,
+                and keep all writes to the internal cache instead of touching
+                the actual text buffer.
 
                 Application-facing API:
 
