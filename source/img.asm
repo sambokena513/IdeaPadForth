@@ -522,6 +522,7 @@ START_SECTION IMPL_TABLE
         FCALL SHELL_INIT
 
         ; finally, enter the main loop
+        sti
         FCALL KMAIN
 
         ; go here if any of the initial driver init routines
@@ -929,6 +930,7 @@ START_SECTION IMPL_TABLE
     IMPL_PRIM TERMINAL_DRIVER, 1
         .loop:
             mov eax, [0x7c20]
+
             DPUSH dword [eax + (kbd_driver_key_buf - GVCT_START)]
 
             ; the only error for this is overflow, and we're fine with dropping
@@ -1158,8 +1160,57 @@ START_SECTION IMPL_TABLE
     ; failures in these functions can escalate to the next level, but never deescalate
     ; currently only the highest-level PANIC is implemented
 
+    ; takes string to print
     IMPL_PRIM OOPS, 1
-        ret
+        cli
+
+        ; print error message
+        mov eax, [0x7c20]
+        lea ebx, [eax + (oops_msg - GVCT_START)]
+        DPUSH ebx
+        DPUSH dword [eax + (oops_len - GVCT_START)]
+        FCALL CLS
+        FCALL PUTS
+        FCALL PUTS
+
+        mov eax, [0x7c20]
+        mov ecx, [eax + (tkc_low - GVCT_START)]
+        mov edx, [eax + (tkc_high - GVCT_START)]
+
+        ; wait for 10 seconds
+        .wait:
+            cli
+            ; watchdog kick
+            mov esi, [eax + (tkc_low - GVCT_START)]
+            mov ebx, [eax + (tkc_high - GVCT_START)]
+            mov [eax + (tkc_low_prev - GVCT_START)], esi
+            mov [eax + (tkc_high_prev - GVCT_START)], ebx
+
+            mov esi, [eax + (tkc_low - GVCT_START)]
+            mov ebx, [eax + (tkc_high - GVCT_START)]
+
+            sub esi, ecx
+            sbb ebx, edx
+
+            test ebx, ebx
+            jnz .reboot
+            cmp esi, 200
+            jae .reboot
+
+            sti
+            hlt
+            jmp .wait
+
+        ; reboot by inducing a triple-fault
+        .reboot:
+            mov dword [0], 0
+            mov dword [4], 0
+            lidt [0]
+            int 0xff
+
+        .hang:
+            hlt
+            jmp .hang
     END_IMPL
 
     IMPL_PRIM STRESS, 1
@@ -1364,7 +1415,22 @@ START_SECTION IMPL_TABLE
         iret
 
         .lockup:
-            FCALL PANIC
+            popad
+            ISR_STACK_PIVOT
+
+            ; arrange for execution to continue in OOPS instead
+            mov eax, [0x7c20]
+            mov ebx, [edi + WDIDX(OOPS) * 12]
+            mov [esp], ebx
+
+            lea ebx, [eax + (watchdog_msg - GVCT_START)]
+            DPUSH ebx
+            DPUSH dword [eax + (watchdog_len - GVCT_START)]
+
+            ; send EOI
+            mov al, PIC_EOI
+            out mPICc, al
+            iret
     END_IMPL
 
     ; irq 1 handler
@@ -2259,6 +2325,8 @@ START_SECTION WD_TABLE
     WORD_DESC SHELL, 0
 
     ; error handling
+    WORD_DESC OOPS, 0
+    WORD_DESC STRESS, 0
     WORD_DESC PANIC, 0
 
     ; interrupts
@@ -2315,6 +2383,8 @@ START_SECTION DICT
     DICT_ENTRY KEYBOARD_DRIVER, "KEYBOARD_DRIVER"
     DICT_ENTRY TERMINAL_DRIVER, "TERMINAL_DRIVER"
     DICT_ENTRY SHELL, "SHELL"
+    DICT_ENTRY OOPS, "OOPS"
+    DICT_ENTRY STRESS, "STRESS"
     DICT_ENTRY PANIC, "PANIC"
     DICT_ENTRY INT_INIT, "INT_INIT"
     DICT_ENTRY SET_INT, "SET_INT"
@@ -2394,10 +2464,14 @@ START_SECTION GVCT
     terminal_cbuf_consumer db 0 ; bit index to set when terminal data becomes available
 
     ; kernel messages
-    greeting db "FIF IMG REVISION 1", 13, 10
+    greeting db "FIF IMG REVISION 1", 10
     greeting_len dd $ - greeting
-    initmsg db "Initialization complete. Entering main loop.", 13, 10
+    initmsg db "Initialization complete. Entering main loop.", 10
     initmsg_len dd $ - initmsg
+    oops_msg db "OOPS - an unrecoverable runtime error occured, rebooting in a few seconds.", 10, "Error message: "
+    oops_len dd $ - oops_msg
+    watchdog_msg db "Kernel soft lockup detected.", 10
+    watchdog_len dd $ - watchdog_msg
 
     ; struct used by the jmp far in INIT to reload CS
     init_jmpptr:
