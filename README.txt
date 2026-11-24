@@ -395,6 +395,58 @@ OS Architecture (so far, this section is subject to change):
                 visible. It handles the alt+<number> shortcut for switching virtual
                 terminals, and the super+<number> shortcut for switching viewports.
 
+                Application-facing API:
+
+                    display_viewport(uint8 viewport_id)
+                        - display a viewport, clears `displayed` flag for all
+                          returns 0 on success, 1 on failure due to invalid
+                          viewport, and 2 on failure due to display backend
+
+                    focus_terminal(uint8 term_id)
+                        - display a terminal/console-backed application,
+                          and make input events be redirected to it
+                          returns 0 on success, 1 on failure due to invalid
+                          terminal, 2 on failure due to internal display errors
+
+                    flush_dirty(uint32 console)
+                        - flush and display all the dirty logical cells that are currently
+                          mapped and displayed for a particular console
+
+                    map_cell(uint32 console, uint16 x, uint16 y, uint16 phys)
+                        - map a console's logical cell to a specific physical
+                          cell, returns 0 on success, or 1 if the logical cell
+                          coordinates are invalid for that console, returns 2
+                          if something else is already mapped to that physical
+                          cell, and returns 3 if the physical cell is invalid
+                          (such as for framebuffer display backends,
+                          if the framebuffer does not exist)
+
+                    unmap_cell(uint16 phys)
+                        - remove a cell mapping, and make the
+                          logical cell that was previously mapped now not be
+                          displayed, and have an invalid phys_cell field,
+                          returns 0 on success and 1 if the cell was already
+                          unmapped
+
+                    display_cell(uint16 phys)
+                        - take a physical cell, and display the contents of
+                          the logical cell mapped to it, returns 0 on success,
+                          1 on no logical cell, and 2 for nonexistent physical
+                          cell
+
+                    Note on implementation, this interface is generally
+                    designed around the fact that we already have a concept of
+                    a "physical" character cell array, such as provided by VGA
+                    text mode, *however* this does not mean it fully relies on
+                    VGA text mode, a compliant implementation using a
+                    framebuffer console or some other graphics backend is not
+                    required to immediately make cells that are "displayed" or
+                    "flushed" visible, just allow them to *become* visible
+                    once the graphics driver finishes working on it, for
+                    instance you could re-draw the screen 20, 30, or 60 times
+                    per second, and batch display_cell() and flush_dirty()
+                    calls that happen in the same display cycle.
+
             Layer 2 - Consoles: A virtual console presents a clean logical character-cell
                 rendering interface for terminals or other applications to use for
                 displaying things, consoles are implemented by keeping track of a few
@@ -402,9 +454,9 @@ OS Architecture (so far, this section is subject to change):
                 contains character cell descriptor structs of the format:
 
                     - bit 31 - dirty flag, aka "does this cell"
-                    - bits 30..17 - a 14-bit offset from 0xb8000 of the physical
-                      character cell this logical character cell describes
-                    - bit 16 - is this cell displayed at the moment?
+                    - bit 30 - is this cell displayed at the moment?
+                    - bits 29..16 - a 14-bit index identifying the physical
+                      character cell this logical one corresponds to
                     - bits 15..0  - current glyph and attribute byte of character cell
 
                 Additionally, a console also needs to provide this struct for
