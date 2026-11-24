@@ -2109,6 +2109,7 @@ START_SECTION IMPL_TABLE
 
         ; if the new index'd be out of bounds, fail
         add ebx, ecx
+        jc .fail
         cmp ebx, dword [edx + 8]
         ja .fail
 

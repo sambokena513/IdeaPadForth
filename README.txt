@@ -484,3 +484,17 @@ OS Architecture (so far, this section is subject to change):
 
             However each implementation is free to add its own extra fields
             for internal state.
+
+        Additionally, there should be a concept of a "virtual screen" or
+        viewport, which determines which consoles are actually displayed,
+        and which terminal is active. The plan here is to simply make the
+        virtual screen manager the direct consumer of keyboard input rather
+        than the terminal, and have it route input to the active terminal, and
+        route output to the active virtual screen, as well as likely process
+        system requests.
+
+        The initial implementation can simply be VGA page switching to switch
+        viewports, and an intermediate ring buffer that captures input and
+        forwards it to the active terminal, it should recognize sequences like
+        alt+<term-number>, and super+<viewport-number> for switching which
+        terminal receives input, and what is displayed respectively.
