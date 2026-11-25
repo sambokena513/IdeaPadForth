@@ -1542,31 +1542,87 @@ START_SECTION IMPL_TABLE
         mov word [ebx + 4], 50 ; 50 lines
         mov word [ebx + 6], 40 ; 40 characters per line
 
-        ; populate the cell mappings
+        DPUSH ebx ; push console pointer for when we return
+
+        ; map left half of screen to first 25 lines, and right half to next 25
         xor edx, edx
-        .map_cell:
-            cmp edx, 2000
-            je .end
+        xor ebx, ebx
+        .map_row:
+            .map_column:
+                cmp ebx, 40
+                jae .map_right
 
-            ; create cell descriptor
-            mov eax, edx
-            shl eax, 16
-            mov ax, 0x0720 ; space, light gray on black background
-            or eax, 1 << 30 ; displayed
-            and eax, ~(1 << 31) ; dirty = false
+                .map_left:
+                    DPUSH edx
 
-            ; make the logical mapping
-            mov [ecx + edx*4], eax
+                    ; get physical cell index (row * 80 + column)
+                    ; and put into top half of eax, and into edx
+                    mov eax, edx
+                    xor edx, edx
+                    mov edx, 80
+                    mul edx
+                    add eax, ebx
+                    mov edx, eax
 
-            ; flush it to VGA memory
-            mov word [0xb8000 + edx*2], ax
+                    ; construct top half of cell descriptor
+                    shl eax, 16
+                    or eax, 1 << 30 ; displayed
+                    and eax, ~(1 << 31) ; dirty = false
 
+                    ; bottom half
+                    mov ax, 0x172a ; star, light gray on blue background
+
+                    ; make the logical mapping
+                    mov [ecx + edx*4], eax
+
+                    ; flush it to VGA memory
+                    mov word [0xb8000 + edx*2], ax
+                    DPOPR edx
+                    jmp .map_column_end
+
+                .map_right:
+                    DPUSH edx
+
+                    ; get physical cell index (row * 80 + column)
+                    ; and put into top half of eax, and into edx
+                    mov eax, edx
+                    xor edx, edx
+                    mov edx, 80
+                    mul edx
+                    add eax, ebx
+                    mov edx, eax
+
+                    ; offset virt by 960 for second half of console
+                    add eax, 960
+
+                    ; construct top half of cell descriptor
+                    shl eax, 16
+                    or eax, 1 << 30 ; displayed
+                    and eax, ~(1 << 31) ; dirty = false
+
+                    ; bottom half
+                    mov ax, 0x472a ; star, light gray on red background
+
+                    ; make the logical mapping
+                    mov [ecx + edx*4], eax
+
+                    ; flush it to VGA memory
+                    mov word [0xb8000 + edx*2], ax
+                    DPOPR edx
+
+
+                .map_column_end:
+                inc ebx
+                cmp ebx, 80
+                jne .map_column
+
+            xor ebx, ebx
             inc edx
-            jmp .map_cell
-        .end:
+            cmp edx, 25
+            jne .map_row
 
-        DPUSH ebx
-        ret
+        .end:
+            ret
 
         .fail:
             DPUSH -1
@@ -1653,7 +1709,7 @@ START_SECTION IMPL_TABLE
         mov byte [eax + (terminal_cursorattr - GVCT_START)], bl
 
         ; clear the screen with the new attribute byte
-        FCALL CLS
+        ; FCALL CLS
 
         mov eax, [0x7c20] ; reload GVCT
 
@@ -2841,7 +2897,6 @@ START_SECTION GVCT
     ; pretty much anything else that doesn't generate a character is unmapped, I believe this to be better than silently dropping
     ; all non-printing characters, though if you find yourself fat-fingering keys often you can change the TERMINAL_DRIVER function
 
-    ; todo: fill out the entries here
     align 4, db 0
     char_map:
         db `\0\0\0\0` ; no character, reserved
