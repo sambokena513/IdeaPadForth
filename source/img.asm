@@ -428,10 +428,12 @@ START_SECTION IMPL_TABLE
         DPOPR ebx
         cmp ebx, -1
         je .fail
+        mov eax, [0x7c20]
+        mov [eax + (console - GVCT_START)], ebx
 
         ; initialize terminal
         DPUSH 40 - ((greeting_len - greeting) / 2) ; our greeting message should appear in the top-middle
-        DPUSH 0x17 ; cursor attr
+        DPUSH 0x77 ; cursor attr
         DPUSH 0x07 ; attribute byte
         FCALL TERMINAL_INIT
         DPOPR ebx
@@ -552,12 +554,12 @@ START_SECTION IMPL_TABLE
         ; a simple superloop that calls all of the work handlers which have pending work
 
         mov eax, [0x7c20]
-
-        ; test
-        DPUSH '*' | (0x17 << 8)
-        DPUSH  19 | (19 << 16)
-        DPUSH dword [eax + (console - GVCT_START)]
+        DPUSH '*' | (0x07 << 8)
+        DPUSH 24 | (10 << 16)
+        DPUSH [eax + (console - GVCT_START)]
         FCALL RENDER_GLYPH
+
+        FCALL SCROLL
 
         mov eax, [0x7c20]
         .main_loop:
@@ -689,16 +691,16 @@ START_SECTION IMPL_TABLE
 
                 FCALL RING_TRY_DEQUEUE
 
-                DPOPR eax
-                test eax, eax
+                DPOPR ebx
+                mov eax, [0x7c20]
+                test ebx, ebx
                 jz .buf_good
-                cmp eax, 2
+                cmp ebx, 2
                 je .buf_empty
 
                 .buf_error:
                     DPOP
                     FCALL RING_REINIT
-                    mov eax, [0x7c20]
                     jmp .end_dequeue
 
                 .buf_empty:
@@ -710,8 +712,6 @@ START_SECTION IMPL_TABLE
                     DPOPR edx
                     DPOP
             sti
-
-            mov eax, [0x7c20]
 
             ; dispatch to one of the cases based on the state
             movzx ebx, byte [eax + (kbd_driver_state - GVCT_START)]
@@ -1535,7 +1535,6 @@ START_SECTION IMPL_TABLE
         ; set up cell_buf, line_count, and line_length fields,
         ; and store the console pointer
         mov eax, [0x7c20]
-        mov [eax + (console - GVCT_START)], ebx
         lea ecx, [ebx + 8]
 
         mov [ebx], ecx
@@ -1553,7 +1552,7 @@ START_SECTION IMPL_TABLE
                 jae .map_right
 
                 .map_left:
-                    DPUSH edx
+                    DPUSH edx ; save row counter
 
                     ; get physical cell index (row * 80 + column)
                     ; and put into top half of eax, and into edx
@@ -1564,24 +1563,36 @@ START_SECTION IMPL_TABLE
                     add eax, ebx
                     mov edx, eax
 
+                    DPUSH edx ; save phys idx
+
+                    ; calculate logical index
+                    sub edx, ebx
+                    shr edx, 1
+                    add edx, ebx
+
                     ; construct top half of cell descriptor
                     shl eax, 16
                     or eax, 1 << 30 ; displayed
                     and eax, ~(1 << 31) ; dirty = false
 
                     ; bottom half
-                    mov ax, 0x172a ; star, light gray on blue background
+                    mov ax, 0x1720 ; space, light gray on blue background
 
                     ; make the logical mapping
                     mov [ecx + edx*4], eax
 
+                    DPOPR edx
                     ; flush it to VGA memory
                     mov word [0xb8000 + edx*2], ax
                     DPOPR edx
                     jmp .map_column_end
 
                 .map_right:
-                    DPUSH edx
+                    ; very similar to map left, difference is that
+                    ; logical index is not row * 40 + column,
+                    ; but rather row * 40 + 1000 + column - 40
+
+                    DPUSH edx ; save row counter
 
                     ; get physical cell index (row * 80 + column)
                     ; and put into top half of eax, and into edx
@@ -1592,8 +1603,13 @@ START_SECTION IMPL_TABLE
                     add eax, ebx
                     mov edx, eax
 
-                    ; offset virt by 960 for second half of console
-                    add eax, 960
+                    DPUSH edx ; save phys idx
+
+                    ; calculate logical index
+                    sub edx, ebx
+                    shr edx, 1
+                    add edx, ebx
+                    sub edx, 40
 
                     ; construct top half of cell descriptor
                     shl eax, 16
@@ -1601,15 +1617,15 @@ START_SECTION IMPL_TABLE
                     and eax, ~(1 << 31) ; dirty = false
 
                     ; bottom half
-                    mov ax, 0x472a ; star, light gray on red background
+                    mov ax, 0x4720 ; space, light gray on red background
 
                     ; make the logical mapping
-                    mov [ecx + edx*4], eax
+                    mov [ecx + edx*4 + 1000*4], eax
 
+                    DPOPR edx
                     ; flush it to VGA memory
                     mov word [0xb8000 + edx*2], ax
                     DPOPR edx
-
 
                 .map_column_end:
                 inc ebx
@@ -1632,6 +1648,9 @@ START_SECTION IMPL_TABLE
     ; render a glyph using a VGA text console,
     ; takes the console pointer, x_y coords (packed into one dword),
     ; and glyph + attributes (packed into one word)
+
+    ; TODO: make the terminal emulator use this abstraction instead of directly
+    ; writing to VGA memory
     IMPL_PRIM RENDER_GLYPH, 1
         DPOPR ecx ; console
         DPOPR ebx ; x and y coords
@@ -1669,7 +1688,7 @@ START_SECTION IMPL_TABLE
 
         .displayed:
             ; clear dirty flag just in case it was set
-            ; (though it shouldn't've been
+            ; (though it shouldn't've been)
             and word [ecx + 8 + eax*4 + 2], ~(1 << 15)
 
             ; and out the flags so bx contains just the VGA index
@@ -1683,6 +1702,49 @@ START_SECTION IMPL_TABLE
 
         .fail:
             mov esi, 1
+            ret
+    END_IMPL
+
+    ; query the size of a console, returns line count and line length packed into dword,
+    ; high word is y, and low word is x, note that this function is not really a "heavy config operation",
+    ; it's best not to cache the result of this, but instead call it before every render_glyph() call to get
+    ; the available size (which could in theory change at runtime)
+    IMPL_PRIM QUERY_SIZE, 1
+        DPOPR eax
+        DPUSH dword [eax + 4]
+        rol esi, 16
+        ret
+    END_IMPL
+
+    ; given a console and x/y coordinates (packed in dword), return what is at that logical cell, or -1 on error
+    IMPL_PRIM QUERY_CELL, 1
+        DPOPR ecx ; console
+        DPOPR ebx ; x and y coords
+
+        ; extract y position
+        mov edx, ebx
+        shr edx, 16
+
+        ; validate y and x positions
+        cmp dx, word [ecx + 4]
+        jae .fail
+        cmp bx, word [ecx + 6]
+        jae .fail
+
+        ; load logical cell idx into eax
+        movzx eax, word [ecx + 6]
+        mul edx
+        movzx ebx, bx
+        add eax, ebx
+
+        movzx edx, word [ecx + 8 + eax*4]
+
+        .end:
+            DPUSH edx
+            ret
+
+        .fail:
+            DPUSH -1
             ret
     END_IMPL
 
@@ -1786,53 +1848,115 @@ START_SECTION IMPL_TABLE
 
     ; scroll the terminal back one line
     IMPL_PRIM SCROLL, 1
-        ; load gvct
+        ; stop displaying cursor by swapping it back with what's under it
         mov eax, [0x7c20]
+        movzx ebx, word [eax + (terminal_cursorbuf - GVCT_START)]
+        DPUSH ebx
+        DPUSH dword [eax + (terminal_cursor - GVCT_START)]
+        DPUSH dword [eax + (console - GVCT_START)]
+        FCALL RENDER_GLYPH
+        DPOP
 
-        ; set cursor to max(cursor - 80, 0), and stop displaying it on the previous location
-        movzx edx, word [eax + (terminal_cursor - GVCT_START)]
-        mov bl, byte [eax + (terminal_attr - GVCT_START)]
-        mov byte [0xb8001 + edx * 2], bl
+        ; get console size, this decides where to put the cursor,
+        ; and how to copy backwards
+        mov eax, [0x7c20]
+        DPUSH dword [eax + (console - GVCT_START)]
+        FCALL QUERY_SIZE
 
-        cmp dx, 80
-        jnb .move_cursor
-            xor edx, edx
-            jmp .normal
-        .move_cursor:
-            sub edx, 80
-        .normal:
-        mov word [eax + (terminal_cursor - GVCT_START)], dx
+        ; shift cursor back one line
+        mov eax, [0x7c20]
+        sub word [eax + (terminal_cursor_y - GVCT_START)], 1
+        adc word [eax + (terminal_cursor_y - GVCT_START)], 0
 
-        ; loop over the first 24 of 25 lines and copy backwards
-        xor ebx, ebx
-        .copy:
-            cmp ebx, 1920
-            je .endcopy
+        ; copy lines backwards
+        DPOPR ebx
+        DPUSH dword [eax + (console - GVCT_START)]
 
-            mov cx, word [0xb8000 + 80*2 + ebx*2]
-            mov word [0xb8000 + ebx*2], cx
+        mov ecx, ebx
+        movzx ebx, bx ; column count
 
-            inc ebx
-            jmp .copy
-        .endcopy:
+        ; line count - 1
+        shr ecx, 16
+        dec ecx
 
-        xor ebx, ebx
+        xor edx, edx ; line idx
+        .copy_line:
+            cmp edx, ecx
+            je .endcpy
+
+            xor eax, eax ; column idx
+            .copy_column:
+                DPUSH eax
+                DPUSH ebx
+                DPUSH ecx
+                DPUSH edx
+
+                ; move data from one line ahead to this one
+                DDUP
+                inc edx
+                shl edx, 16
+                or edx, eax
+                DPUSH edx
+                DSWAP
+                DPOPR edx
+                shl edx, 16
+                or edx, eax
+                DPUSH edx
+                DSWAP
+
+                mov eax, [0x7c20]
+                DPUSH dword [eax + (console - GVCT_START)]
+                FCALL QUERY_CELL
+                DSWAP
+
+                mov eax, [0x7c20]
+                DPUSH dword [eax + (console - GVCT_START)]
+                FCALL RENDER_GLYPH
+                DPOP
+
+                DPOPR edx
+                DPOPR ecx
+                DPOPR ebx
+                DPOPR eax
+
+                inc eax
+                cmp eax, ebx
+                jne .copy_column
+
+            inc edx
+            jmp .copy_line
+        .endcpy:
+
+        xor eax, eax
         .fill:
-            cmp ebx, 80
-            je .endfill
+            DPUSH eax
+            DPUSH ebx
+            DPUSH ecx
+            DPUSH edx
 
-            mov ch, byte [eax + (terminal_attr - GVCT_START)]
-            mov cl, 32
-            mov [0xb8000 + 1920*2 + ebx*2], cx
+            DPUSH ecx
+            shl esi, 16
+            or esi, eax
 
-            inc ebx
-            jmp .fill
-        .endfill:
+            mov eax, [0x7c20]
+            movzx ebx, byte [eax + (terminal_attr - GVCT_START)]
+            shl ebx, 8
+            or ebx, 0x20
+            DPUSH ebx
+            DSWAP
 
-        ; display cursor at new position
-        movzx edx, word [eax + (terminal_cursor - GVCT_START)]
-        mov bl, byte [eax + (terminal_cursorattr - GVCT_START)]
-        mov byte [0xb8001 + edx * 2], bl
+            DPUSH dword [eax + (console - GVCT_START)]
+            FCALL RENDER_GLYPH
+            DPOP
+
+            DPOPR edx
+            DPOPR ecx
+            DPOPR ebx
+            DPOPR eax
+
+            inc eax
+            cmp eax, ebx
+            jne .fill
         ret
     END_IMPL
 
@@ -2549,6 +2673,8 @@ START_SECTION WD_TABLE
     ; console
     WORD_DESC CONSOLE_INIT, 0
     WORD_DESC RENDER_GLYPH, 0
+    WORD_DESC QUERY_SIZE, 0
+    WORD_DESC QUERY_CELL, 0
 
     ; terminal
     WORD_DESC TERMINAL_INIT, 0
@@ -2604,6 +2730,8 @@ START_SECTION DICT
     DICT_ENTRY KEYBOARD_INT, "KEYBOARD_INT"
     DICT_ENTRY CONSOLE_INIT, "CONSOLE_INIT"
     DICT_ENTRY RENDER_GLYPH, "RENDER_GLYPH"
+    DICT_ENTRY QUERY_SIZE, "QUERY_SIZE"
+    DICT_ENTRY QUERY_CELL, "QUERY_CELL"
     DICT_ENTRY TERMINAL_INIT, "TERMINAL_INIT"
     DICT_ENTRY CLS, "CLS"
     DICT_ENTRY SCROLL, "SCROLL"
@@ -2671,9 +2799,16 @@ START_SECTION GVCT
     console dd 0
 
     ; terminal variables
-    terminal_cursor dw 0 ; current position in VGA text buffer
+    ; can read this as dword to get the combined x_y value
+    ; taken as argument by functions like render_glyph(),
+    ; or you can manipulate individual fields
+    terminal_cursor:
+    terminal_cursor_x dw 0
+    terminal_cursor_y dw 0
+
     terminal_attr db 0 ; attribute byte to use for characters
     terminal_cursorattr db 0 ; attribute byte to use for the cell the cursor is on
+    terminal_cursorbuf dw 0 ; holds what the cell "under" the cursor should display
 
     terminal_cbuf dd 0 ; input buffer for characters
     terminal_cbuf_rlimit dd 0 ; terminal_cbuf ring buffer's head as visible to applications
