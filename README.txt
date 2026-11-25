@@ -453,22 +453,17 @@ OS Architecture (so far, this section is subject to change):
                 important pieces of state inside an array of x * y length, this array
                 contains character cell descriptor structs of the format:
 
-                    - bit 31 - dirty flag, aka "does this cell"
+                    - bit 31 - dirty flag, aka "do this cell's buffer's
+                      contents match the display memory?"
                     - bit 30 - is this cell displayed at the moment?
                     - bits 29..16 - a 14-bit index identifying the physical
                       character cell this logical one corresponds to
                     - bits 15..0  - current glyph and attribute byte of character cell
 
                 Additionally, a console also needs to provide this struct for
-                applications and the compositor to be able to use it:
+                compositor to be able to interact with it:
 
                     struct {
-                        // required by terminals
-                        uint32 render_glyph;
-                        uint32 query_size;
-                        uint32 cls;
-
-                        // these are required for the compositor
                         uint32 cell_buf;
                         uint16 line_count;
                         uint16 line_length
@@ -483,16 +478,16 @@ OS Architecture (so far, this section is subject to change):
 
                 Application-facing API:
 
-                    console_render_glyph(uint32 console, uint32 x, uint32 y, uint8 glyph, uint8 attributes)
-                        - render an ASCII glyph on <console> at <x,y>, if <glyph>
-                          is not a printable ASCII character, behaviour is undefined.
-                          Returns 0 on success or -1 on failure (such as invalid
-                          coordinates or if it's backed by a graphics driver, graphics
-                          problem). Finally, the <attributes> argument determines the
-                          background and foreground color of the displayed glyph,
-                          this is a VGA attribute byte, even if the console is not a
-                          VGA text console, it must accept VGA-style attribute bytes
-                          for colors.
+                    console_render_glyph(uint32 console, uint32 x_y, uint16 glyph_attr)
+                        - render a glyph + attributes at coordinates, the top
+                          16 bits of <x_y> are the y coordinate, and the
+                          bottom is the x coordinate
+
+                          <glyph_attr>'s bottom 8 bits are the glyph, and top
+                          8 bits are VGA attributes, even if the console is
+                          not a VGA console, it must accept VGA-style attribute bytes
+                          returns 0 on success, 1 on invalid coordinates, and
+                          2 on display error
 
                     console_query_size(uint32 console)
                         - obtain the range of valid x and y coordinates for a given

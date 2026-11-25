@@ -424,19 +424,19 @@ START_SECTION IMPL_TABLE
         mov [eax + (isr_return_stack - GVCT_START)], ebx
 
         ; initialize console
+        FCALL CONSOLE_INIT
+        DPOPR ebx
+        cmp ebx, -1
+        je .fail
+
+        ; initialize terminal
         DPUSH 40 - ((greeting_len - greeting) / 2) ; our greeting message should appear in the top-middle
         DPUSH 0x17 ; cursor attr
         DPUSH 0x07 ; attribute byte
-        FCALL CONSOLE_INIT
-        DPOPR ebx
-        test ebx, ebx
-        jnz .fail
-
-        ; initialize terminal
         FCALL TERMINAL_INIT
         DPOPR ebx
-        test ebx, ebx
-        jnz .fail
+        cmp ebx, -1
+        je .fail
 
         ; print greeting message
         mov eax, [0x7c20]
@@ -446,36 +446,11 @@ START_SECTION IMPL_TABLE
         DPUSH ebx
         FCALL PUTS
 
-        ; print out kernel arena memory
-        mov eax, [0x7c20]
-        mov ebx, [eax + (karena_entry - GVCT_START)]
-
-        DPUSH 10
-        DPUSH 13
-        DPUSH [ebx + 8]
-        add esi, [ebx]
-        DPUSH [ebx + 12]
-        add esi, [ebx + 4]
-        DPUSH '-'
-        DPUSH [ebx]
-        DPUSH [ebx + 4]
-        DPUSH 'x'
-        DPUSH '0'
-        FCALL PUTC
-        FCALL PUTC
-        FCALL PUTH
-        FCALL PUTH
-        FCALL PUTC
-        FCALL PUTH
-        FCALL PUTH
-        FCALL PUTC
-        FCALL PUTC
-
         ; initialize keyboard controller and driver
         FCALL KEYBOARD_INIT
         DPOPR ebx
-        test ebx, ebx
-        jnz .fail
+        cmp ebx, -1
+        je .fail
 
         ; initialize interrupt subsystem so we can bind service routines
         FCALL INT_INIT
@@ -511,15 +486,56 @@ START_SECTION IMPL_TABLE
         and al, ~((1 << 0) | (1 << 1))
         out mPICd, al
 
+        ; initialize command interpreter
+        FCALL SHELL_INIT
+
+        ; print out kernel arena memory
+        mov eax, [0x7c20]
+        mov ebx, [eax + (karena_entry - GVCT_START)]
+
+        mov ecx, [ebx]
+        mov edx, [ebx + 4]
+        add ecx, [eax + (karena_here - GVCT_START)]
+        adc edx, 0
+
+        DPUSH 10
+        DPUSH 13
+        DPUSH [ebx + 8]
+        add esi, [ebx]
+        DPUSH [ebx + 12]
+        add esi, [ebx + 4]
+
+        DPUSH '-'
+        DPUSH ecx
+        DPUSH edx
+        DPUSH '-'
+
+        DPUSH [ebx]
+        DPUSH [ebx + 4]
+        DPUSH 'x'
+        DPUSH '0'
+
+        FCALL PUTC
+        FCALL PUTC
+        FCALL PUTH
+        FCALL PUTH
+
+        FCALL PUTC
+        FCALL PUTH
+        FCALL PUTH
+        FCALL PUTC
+
+        FCALL PUTH
+        FCALL PUTH
+        FCALL PUTC
+        FCALL PUTC
+
         mov eax, [0x7c20]
         mov ebx, [eax + (initmsg_len - GVCT_START)]
         lea eax, [eax + (initmsg - GVCT_START)]
         DPUSH eax
         DPUSH ebx
         FCALL PUTS
-
-        ; initialize command interpreter
-        FCALL SHELL_INIT
 
         ; finally, enter the main loop
         sti
@@ -534,6 +550,14 @@ START_SECTION IMPL_TABLE
     ; main loop
     IMPL_PRIM KMAIN, 1
         ; a simple superloop that calls all of the work handlers which have pending work
+
+        mov eax, [0x7c20]
+
+        ; test
+        DPUSH '*' | (0x17 << 8)
+        DPUSH  19 | (19 << 16)
+        DPUSH dword [eax + (console - GVCT_START)]
+        FCALL RENDER_GLYPH
 
         mov eax, [0x7c20]
         .main_loop:
@@ -1022,11 +1046,6 @@ START_SECTION IMPL_TABLE
                 cmp ebx,  0x21 ; R keycode
                 je .sysrq_reset
 
-                pushad
-                DPUSH ebx
-                FCALL PUTH
-                popad
-
                 jmp .loop
 
             ; clear the screen
@@ -1501,9 +1520,120 @@ START_SECTION IMPL_TABLE
             iret
     END_IMPL
 
-    ; initialize the console, args are the attribute byte to use,
-    ; attribute byte to use for the cursor, and initial software cursor position
+    ; initialize a console, returns -1 on failure, otherwise pointer to the console
+    ; placeholder implementation, currently always returns a 50-line 40-column logical
+    ; console mapped to the first VGA page
     IMPL_PRIM CONSOLE_INIT, 1
+
+        ; allocate memory
+        DPUSH 8 + 8000 ; 2000 character cells
+        FCALL KRESERVE
+        DPOPR ebx
+        cmp ebx, -1
+        je .fail
+
+        ; set up cell_buf, line_count, and line_length fields,
+        ; and store the console pointer
+        mov eax, [0x7c20]
+        mov [eax + (console - GVCT_START)], ebx
+        lea ecx, [ebx + 8]
+
+        mov [ebx], ecx
+        mov word [ebx + 4], 50 ; 50 lines
+        mov word [ebx + 6], 40 ; 40 characters per line
+
+        ; populate the cell mappings
+        xor edx, edx
+        .map_cell:
+            cmp edx, 2000
+            je .end
+
+            ; create cell descriptor
+            mov eax, edx
+            shl eax, 16
+            mov ax, 0x0720 ; space, light gray on black background
+            or eax, 1 << 30 ; displayed
+            and eax, ~(1 << 31) ; dirty = false
+
+            ; make the logical mapping
+            mov [ecx + edx*4], eax
+
+            ; flush it to VGA memory
+            mov word [0xb8000 + edx*2], ax
+
+            inc edx
+            jmp .map_cell
+        .end:
+
+        DPUSH ebx
+        ret
+
+        .fail:
+            DPUSH -1
+            ret
+    END_IMPL
+
+    ; render a glyph using a VGA text console,
+    ; takes the console pointer, x_y coords (packed into one dword),
+    ; and glyph + attributes (packed into one word)
+    IMPL_PRIM RENDER_GLYPH, 1
+        DPOPR ecx ; console
+        DPOPR ebx ; x and y coords
+
+        ; extract y position
+        mov edx, ebx
+        shr edx, 16
+
+        ; validate y and x positions
+        cmp dx, word [ecx + 4]
+        jae .fail
+        cmp bx, word [ecx + 6]
+        jae .fail
+
+        ; load logical cell idx into eax
+        movzx eax, word [ecx + 6]
+        mul edx
+        movzx ebx, bx
+        add eax, ebx
+
+        ; render into shadow buffer
+        mov word [ecx + 8 + eax*4], si
+
+        ; load the mapping/flag word into ebx
+        movzx ebx, word [ecx + 8 + eax*4 + 2]
+
+        ; check the displayed flag
+        test ebx, 1 << 14
+        jnz .displayed
+
+        .not_displayed:
+            or word [ecx + 8 + eax*4 + 2], 1 << 15 ; set dirty flag
+            xor esi, esi
+            ret
+
+        .displayed:
+            ; clear dirty flag just in case it was set
+            ; (though it shouldn't've been
+            and word [ecx + 8 + eax*4 + 2], ~(1 << 15)
+
+            ; and out the flags so bx contains just the VGA index
+            and ebx, ~(1 << 15 | 1 << 14)
+
+            ; finally, write to VGA memory
+            mov word [0xb8000 + ebx*2], si
+
+            xor esi, esi
+            ret
+
+        .fail:
+            mov esi, 1
+            ret
+    END_IMPL
+
+    ; initialize terminal, args are attribute byte to use for normal text,
+    ; for the cursor, and the initial position of the cursor
+    ; on success
+    IMPL_PRIM TERMINAL_INIT, 1
         ; disable hardware cursor since we don't use it
         mov dx, 0x3d4
         mov al, 0xa
@@ -1517,10 +1647,10 @@ START_SECTION IMPL_TABLE
 
         ; set attribute byte
         DPOPR ebx
-        mov byte [eax + (console_attr - GVCT_START)], bl
+        mov byte [eax + (terminal_attr - GVCT_START)], bl
 
         ; set cursor attr byte to normal one temporarily so CLS effectively doesn't use it
-        mov byte [eax + (console_cursorattr - GVCT_START)], bl
+        mov byte [eax + (terminal_cursorattr - GVCT_START)], bl
 
         ; clear the screen with the new attribute byte
         FCALL CLS
@@ -1529,25 +1659,11 @@ START_SECTION IMPL_TABLE
 
         ; set cursor pos and display the cursor
         DPOPR ecx
-        mov byte [eax + (console_cursorattr - GVCT_START)], cl
+        mov byte [eax + (terminal_cursorattr - GVCT_START)], cl
         DPOPR ebx
-        mov word [eax + (console_cursor - GVCT_START)], bx
+        mov word [eax + (terminal_cursor - GVCT_START)], bx
         mov byte [0xb8001 + ebx * 2], cl ; display cursor
 
-        DPUSH 0
-        ret
-    END_IMPL
-
-    IMPL_PRIM RENDER_GLYPH, 1
-        ; placeholder, later terminal should stop caring about
-        ; console implementation and instead use this to render characters
-        ; at x,y coordinates in a virtual console
-        ret
-    END_IMPL
-
-    ; initialize terminal, takes no arguments and returns -1 on error or 0
-    ; on success
-    IMPL_PRIM TERMINAL_INIT, 1
         ; mark the terminal as the keycode consumer and initialize key buf
         DPUSH 1
         DPUSH 256
@@ -1588,10 +1704,10 @@ START_SECTION IMPL_TABLE
     ; clear the screen
     IMPL_PRIM CLS, 1
         mov eax, [0x7c20]
-        mov word [eax + (console_cursor - GVCT_START)], 0 ; reset cursor
+        mov word [eax + (terminal_cursor - GVCT_START)], 0 ; reset cursor
 
         ; copy the console's default attribute byte, and ascii whitespace into all 2000 tiles
-        mov bl, byte [eax + (console_attr - GVCT_START)]
+        mov bl, byte [eax + (terminal_attr - GVCT_START)]
         mov edx, 0xb8000
         xor ecx, ecx
         .loop:
@@ -1606,7 +1722,7 @@ START_SECTION IMPL_TABLE
         .end:
 
         ; set the displayed cursor
-        mov bl, byte [eax + (console_cursorattr - GVCT_START)]
+        mov bl, byte [eax + (terminal_cursorattr - GVCT_START)]
         mov byte [0xb8001], bl
 
         ret
@@ -1618,8 +1734,8 @@ START_SECTION IMPL_TABLE
         mov eax, [0x7c20]
 
         ; set cursor to max(cursor - 80, 0), and stop displaying it on the previous location
-        movzx edx, word [eax + (console_cursor - GVCT_START)]
-        mov bl, byte [eax + (console_attr - GVCT_START)]
+        movzx edx, word [eax + (terminal_cursor - GVCT_START)]
+        mov bl, byte [eax + (terminal_attr - GVCT_START)]
         mov byte [0xb8001 + edx * 2], bl
 
         cmp dx, 80
@@ -1629,7 +1745,7 @@ START_SECTION IMPL_TABLE
         .move_cursor:
             sub edx, 80
         .normal:
-        mov word [eax + (console_cursor - GVCT_START)], dx
+        mov word [eax + (terminal_cursor - GVCT_START)], dx
 
         ; loop over the first 24 of 25 lines and copy backwards
         xor ebx, ebx
@@ -1649,7 +1765,7 @@ START_SECTION IMPL_TABLE
             cmp ebx, 80
             je .endfill
 
-            mov ch, byte [eax + (console_attr - GVCT_START)]
+            mov ch, byte [eax + (terminal_attr - GVCT_START)]
             mov cl, 32
             mov [0xb8000 + 1920*2 + ebx*2], cx
 
@@ -1658,8 +1774,8 @@ START_SECTION IMPL_TABLE
         .endfill:
 
         ; display cursor at new position
-        movzx edx, word [eax + (console_cursor - GVCT_START)]
-        mov bl, byte [eax + (console_cursorattr - GVCT_START)]
+        movzx edx, word [eax + (terminal_cursor - GVCT_START)]
+        mov bl, byte [eax + (terminal_cursorattr - GVCT_START)]
         mov byte [0xb8001 + edx * 2], bl
         ret
     END_IMPL
@@ -1667,9 +1783,9 @@ START_SECTION IMPL_TABLE
     ; move the cursor back one position
     IMPL_PRIM TERM_BACKSPACE, 1
         mov eax, [0x7c20]
-        movzx ecx, word [eax + console_cursor - GVCT_START]
-        mov bl, byte [eax + (console_attr - GVCT_START)]
-        mov dl, byte [eax + (console_cursorattr - GVCT_START)]
+        movzx ecx, word [eax + terminal_cursor - GVCT_START]
+        mov bl, byte [eax + (terminal_attr - GVCT_START)]
+        mov dl, byte [eax + (terminal_cursorattr - GVCT_START)]
 
         ; make sure that we can go backwards
         test ecx, ecx
@@ -1679,7 +1795,7 @@ START_SECTION IMPL_TABLE
         .good:
             mov byte [0xb8001 + ecx*2], bl
             mov byte [0xb8001 + ecx*2 - 1*2], dl
-            dec word [eax + (console_cursor - GVCT_START)]
+            dec word [eax + (terminal_cursor - GVCT_START)]
             ret
     END_IMPL
 
@@ -1688,7 +1804,7 @@ START_SECTION IMPL_TABLE
         mov ebx, [0x7c20]
 
         ; TOS = eax / 80 * 80, eax = cursor
-        movzx eax, word [ebx + (console_cursor - GVCT_START)]
+        movzx eax, word [ebx + (terminal_cursor - GVCT_START)]
         DPUSH eax
         mov ecx, 80
         xor edx, edx
@@ -1696,11 +1812,11 @@ START_SECTION IMPL_TABLE
         mul ecx
 
         ; move the cursor
-        mov cl, byte [ebx + (console_attr - GVCT_START)]
-        mov dl, byte [ebx + (console_cursorattr - GVCT_START)]
+        mov cl, byte [ebx + (terminal_attr - GVCT_START)]
+        mov dl, byte [ebx + (terminal_cursorattr - GVCT_START)]
         mov byte [0xb8001 + esi*2], cl
         mov byte [0xb8001 + eax*2], dl
-        mov word [ebx + (console_cursor - GVCT_START)], ax
+        mov word [ebx + (terminal_cursor - GVCT_START)], ax
         DPOP
         ret
     END_IMPL
@@ -1710,20 +1826,20 @@ START_SECTION IMPL_TABLE
         mov eax, [0x7c20]
 
         ; scroll if needed
-        cmp word [eax + (console_cursor - GVCT_START)], 1920
+        cmp word [eax + (terminal_cursor - GVCT_START)], 1920
         jb .after_scroll
             FCALL SCROLL
         .after_scroll:
 
         ; update displayed cursor
-        movzx ecx, word [eax + (console_cursor - GVCT_START)]
-        mov bl, byte [eax + (console_attr - GVCT_START)]
-        mov dl, byte [eax + (console_cursorattr - GVCT_START)]
+        movzx ecx, word [eax + (terminal_cursor - GVCT_START)]
+        mov bl, byte [eax + (terminal_attr - GVCT_START)]
+        mov dl, byte [eax + (terminal_cursorattr - GVCT_START)]
         mov byte [0xb8001 + ecx*2], bl
         mov byte [0xb8001 + ecx*2 + 80*2], dl
 
         ; update saved cursor
-        add word [eax + (console_cursor - GVCT_START)], 80
+        add word [eax + (terminal_cursor - GVCT_START)], 80
         ret
     END_IMPL
 
@@ -1739,7 +1855,7 @@ START_SECTION IMPL_TABLE
         je .ln
 
         ; scroll first if needed
-        cmp word [eax + (console_cursor - GVCT_START)], 1999 ; since the cursor is one ahead of the text we do 1999 instead of 2000
+        cmp word [eax + (terminal_cursor - GVCT_START)], 1999 ; since the cursor is one ahead of the text we do 1999 instead of 2000
         jb .after_scroll
         FCALL SCROLL
         .after_scroll:
@@ -1749,17 +1865,17 @@ START_SECTION IMPL_TABLE
             mov eax, [0x7c20]
 
             ; load values
-            movzx ecx, word [eax + (console_cursor - GVCT_START)]
+            movzx ecx, word [eax + (terminal_cursor - GVCT_START)]
             xor ebx, ebx
-            mov bh, byte [eax + (console_attr - GVCT_START)] 
-            mov dl, byte [eax + (console_cursorattr - GVCT_START)]
+            mov bh, byte [eax + (terminal_attr - GVCT_START)] 
+            mov dl, byte [eax + (terminal_cursorattr - GVCT_START)]
             or esi, ebx
 
             ; display character and new cursor
             mov word [0xb8000 + ecx*2], si
             mov byte [0xb8001 + ecx*2 + 1*2], dl
 
-            inc word [eax + (console_cursor - GVCT_START)]
+            inc word [eax + (terminal_cursor - GVCT_START)]
             DPOP
             ret
 
@@ -1869,6 +1985,15 @@ START_SECTION IMPL_TABLE
         mov eax, [0x7c20]
         mov byte [eax + (terminal_cbuf_consumer - GVCT_START)], 3 ; we are task 3
         ret
+    END_IMPL
+
+    ; dynamically resolve a word descriptor index and execute the function
+    IMPL_PRIM EXECUTE, 1
+        DPOPR eax
+        xor edx, edx
+        mov ecx, 12
+        mul ecx
+        jmp [edi + eax]
     END_IMPL
 
     ; initialize the ps/2 controller and make sure the keyboard is using scan code set 2,
@@ -2385,6 +2510,7 @@ START_SECTION WD_TABLE
 
     ; command line
     WORD_DESC SHELL_INIT, 0
+    WORD_DESC EXECUTE, 0
 
     ; keyboard
     WORD_DESC KEYBOARD_INIT, 0
@@ -2433,6 +2559,7 @@ START_SECTION DICT
     DICT_ENTRY PUTH, "PUTH"
     DICT_ENTRY GETC, "GETC"
     DICT_ENTRY SHELL_INIT, "SHELL_INIT"
+    DICT_ENTRY EXECUTE, "EXECUTE"
     DICT_ENTRY KEYBOARD_INIT, "KEYBOARD_INIT"
     DICT_ENTRY RING_INIT, "RING_INIT"
     DICT_ENTRY RING_REINIT, "RING_REINIT"
@@ -2484,10 +2611,13 @@ START_SECTION GVCT
     ; the superloop in KMAIN invokes the respective handlers
     pending_work dd 0
 
+    ; main console
+    console dd 0
+
     ; terminal variables
-    console_cursor dw 0 ; current position in VGA text buffer
-    console_attr db 0 ; attribute byte to use for characters
-    console_cursorattr db 0 ; attribute byte to use for the cell the cursor is on
+    terminal_cursor dw 0 ; current position in VGA text buffer
+    terminal_attr db 0 ; attribute byte to use for characters
+    terminal_cursorattr db 0 ; attribute byte to use for the cell the cursor is on
 
     terminal_cbuf dd 0 ; input buffer for characters
     terminal_cbuf_rlimit dd 0 ; terminal_cbuf ring buffer's head as visible to applications
