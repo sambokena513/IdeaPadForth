@@ -1056,7 +1056,7 @@ START_SECTION IMPL_TABLE
 
             ; clear the screen
             .sysrq_reset:
-                FCALL CLS
+                FCALL TERM_RESET
                 jmp .loop
 
             ; crash the OS by causing the watchdog timer to run out
@@ -1224,7 +1224,7 @@ START_SECTION IMPL_TABLE
         lea ebx, [eax + (oops_msg - GVCT_START)]
         DPUSH ebx
         DPUSH dword [eax + (oops_len - GVCT_START)]
-        FCALL CLS
+        FCALL TERM_RESET
         FCALL PUTS
         FCALL PUTS
 
@@ -1655,8 +1655,6 @@ START_SECTION IMPL_TABLE
     ; takes the console pointer, x_y coords (packed into one dword),
     ; and glyph + attributes (packed into one word)
 
-    ; TODO: make the terminal emulator use this abstraction instead of directly
-    ; writing to VGA memory
     IMPL_PRIM RENDER_GLYPH, 1
         DPOPR ecx ; console
         DPOPR ebx ; x and y coords
@@ -1772,16 +1770,7 @@ START_SECTION IMPL_TABLE
         mov cl, 0x20
         mov word [eax + (terminal_cursorbuf - GVCT_START)], cx
 
-        ; display cursor
-        mov dh, dl
-        mov dl, 0x20
-        DPUSH edx
-        DPUSH dword [eax + (terminal_cursor - GVCT_START)]
-        DPUSH dword [eax + (terminal_console - GVCT_START)]
-        FCALL RENDER_GLYPH
-        DPOP
-
-        ; TODO: should clear the screen once I implement CLS
+        FCALL TERM_RESET
 
         ; mark the terminal as the keycode consumer and initialize key buf
         DPUSH 1
@@ -1823,31 +1812,52 @@ START_SECTION IMPL_TABLE
             ret
     END_IMPL
 
-    ; clear the screen
+    ; clear the screen of a logical console, takes console and the glyph-attribute
+    ; pair to fill the console with
     IMPL_PRIM CLS, 1
-        ret ; TODO: redo this for the new console abstraction
+        DPOPR ebx
 
-        mov eax, [0x7c20]
-        mov word [eax + (terminal_cursor - GVCT_START)], 0 ; reset cursor
+        ; put number of loop iterations into eax
+        xor edx, edx
+        movzx eax, word [ebx + 4]
+        movzx ecx, word [ebx + 6]
+        mul ecx
 
-        ; copy the console's default attribute byte, and ascii whitespace into all 2000 tiles
-        mov bl, byte [eax + (terminal_attr - GVCT_START)]
-        mov edx, 0xb8000
+        ; eax = limit, ebx = cell array, ecx = idx, edx = glyph+attr
+        mov ebx, [ebx]
         xor ecx, ecx
+        DPOPR edx
         .loop:
-            cmp ecx, 4000
+            cmp ecx, eax
             je .end
+            DPUSH eax
 
-            mov byte [edx + ecx], 32
-            mov byte [edx + ecx + 1], bl
+            mov eax, [ebx + ecx*4]
+            mov ax, dx
+            test eax, 1 << 30
+            jz .not_displayed
 
-            add ecx, 2
+            .displayed:
+                mov [ebx + ecx*4], eax
+                DPUSH edx
+
+                mov edx, eax
+                shr edx, 16
+                and edx, ~(1 << 15 | 1 << 14)
+                mov word [0xb8000 + edx*2], ax
+
+                DPOPR edx
+                jmp .end_iter
+
+            .not_displayed:
+                or eax, 1 << 31
+                mov [ebx + ecx*4], eax
+
+            .end_iter:
+            DPOPR eax
+            inc ecx
             jmp .loop
         .end:
-
-        ; set the displayed cursor
-        mov bl, byte [eax + (terminal_cursorattr - GVCT_START)]
-        mov byte [0xb8001], bl
 
         ret
     END_IMPL
@@ -1965,6 +1975,33 @@ START_SECTION IMPL_TABLE
             jne .fill
 
         ; re-render cursor now that scrolling's done
+        mov eax, [0x7c20]
+        mov bh, byte [eax + (terminal_cursorattr - GVCT_START)]
+        mov bl, 0x20
+        movzx ebx, bx
+        DPUSH ebx
+        DPUSH dword [eax + (terminal_cursor - GVCT_START)]
+        DPUSH dword [eax + (terminal_console - GVCT_START)]
+        FCALL RENDER_GLYPH
+        DPOP
+        ret
+    END_IMPL
+
+    ; reset the cursor position of the terminal, and clear the screen
+    ; with the current attribute bytes, then display the cursor
+    IMPL_PRIM TERM_RESET, 1
+        mov eax, [0x7c20]
+        mov dword [eax + (terminal_cursor - GVCT_START)], 0
+        mov ch, byte [eax + (terminal_attr - GVCT_START)]
+        mov cl, 0x20
+        movzx ecx, cx
+
+        mov word [eax + (terminal_cursorbuf - GVCT_START)], cx
+
+        DPUSH ecx
+        DPUSH dword [eax + (terminal_console - GVCT_START)]
+        FCALL CLS
+
         mov eax, [0x7c20]
         mov bh, byte [eax + (terminal_cursorattr - GVCT_START)]
         mov bl, 0x20
@@ -2796,6 +2833,7 @@ START_SECTION WD_TABLE
     WORD_DESC TERMINAL_INIT, 0
     WORD_DESC CLS, 0
     WORD_DESC SCROLL, 0
+    WORD_DESC TERM_RESET, 0
     WORD_DESC TERM_BACKSPACE, 0
     WORD_DESC TERM_CR, 0
     WORD_DESC TERM_LN, 0
@@ -2851,6 +2889,7 @@ START_SECTION DICT
     DICT_ENTRY TERMINAL_INIT, "TERMINAL_INIT"
     DICT_ENTRY CLS, "CLS"
     DICT_ENTRY SCROLL, "SCROLL"
+    DICT_ENTRY TERM_RESET, "TERM_RESET"
     DICT_ENTRY TERM_BACKSPACE, "TERM_BACKSPACE"
     DICT_ENTRY TERM_CR, "TERM_CR"
     DICT_ENTRY TERM_LN, "TERM_LN"
