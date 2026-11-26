@@ -495,8 +495,9 @@ OS Architecture (so far, this section is subject to change):
 
                     console_cls(uint32 console)
                         - clear the screen, equivalent to calling render_glyph() on
-                          on every character cell with ASCII 32 as the glyph, but more
-                          performant. Same as render_glyph(), returns error code.
+                          on every character cell with ASCII 32 as the glyph,
+                          but can be more performant depending on
+                          implementation. Same as render_glyph(), returns error code.
 
 
             Layer 3 - Terminals: virtual terminals are backed by consoles, and provide
@@ -508,8 +509,9 @@ OS Architecture (so far, this section is subject to change):
 
                 Application-facing API:
 
-                    term_putc(uint32 character)
-                        - print a character to the screen
+                    term_putc(uint8 character)
+                        - print a character to the screen, only ASCII
+                          characters are required to be supported
 
                     term_puts(uint32 string)
                         - print a string to the screen
@@ -518,7 +520,7 @@ OS Architecture (so far, this section is subject to change):
                         - get a character from terminal input, returning a 32-bit
                           value, if no characters are available, this is -1,
                           otherwise only the bottom 8 bits are significant,
-                          and correspond to an ASCII character.
+                          and correspond to a Code Page 437 character.
 
                     term_scroll(uint8 direction)
                         - Scroll one line upwards or downwards, depending on terminal

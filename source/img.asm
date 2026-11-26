@@ -423,18 +423,26 @@ START_SECTION IMPL_TABLE
         add ebx, 16 * 1024
         mov [eax + (isr_return_stack - GVCT_START)], ebx
 
+        ; turn off VGA text hardware cursor
+        mov dx, 0x3d4
+        mov al, 0xa
+        out dx, al
+        inc dx
+        mov al, 0x20
+        out dx, al
+
         ; initialize console
         FCALL CONSOLE_INIT
         DPOPR ebx
         cmp ebx, -1
         je .fail
         mov eax, [0x7c20]
-        mov [eax + (console - GVCT_START)], ebx
+        mov [eax + (terminal_console - GVCT_START)], ebx
 
         ; initialize terminal
-        DPUSH 40 - ((greeting_len - greeting) / 2) ; our greeting message should appear in the top-middle
         DPUSH 0x77 ; cursor attr
         DPUSH 0x07 ; attribute byte
+        DPUSH dword [eax + (terminal_console - GVCT_START)]
         FCALL TERMINAL_INIT
         DPOPR ebx
         cmp ebx, -1
@@ -558,8 +566,6 @@ START_SECTION IMPL_TABLE
         DPUSH 24 | (10 << 16)
         DPUSH [eax + (console - GVCT_START)]
         FCALL RENDER_GLYPH
-
-        FCALL SCROLL
 
         mov eax, [0x7c20]
         .main_loop:
@@ -1183,8 +1189,8 @@ START_SECTION IMPL_TABLE
             cmp eax, -1
             je .end
 
-            DPUSH eax
-            FCALL PUTC
+            ;DPUSH eax
+            ;FCALL PUTC
 
             jmp .loop
 
@@ -1748,39 +1754,34 @@ START_SECTION IMPL_TABLE
             ret
     END_IMPL
 
-    ; initialize terminal, args are attribute byte to use for normal text,
-    ; for the cursor, and the initial position of the cursor
-    ; on success
+    ; initialize terminal, args are the console to display on
+    ; and attribute bytes to use for normal text and for the cursor
+    ; returns 0 on success, or -1 on failure
     IMPL_PRIM TERMINAL_INIT, 1
-        ; disable hardware cursor since we don't use it
-        mov dx, 0x3d4
-        mov al, 0xa
-        out dx, al
-
-        inc dx
-        mov al, 0x20
-        out dx, al
-
         mov eax, [0x7c20]
 
-        ; set attribute byte
         DPOPR ebx
-        mov byte [eax + (terminal_attr - GVCT_START)], bl
-
-        ; set cursor attr byte to normal one temporarily so CLS effectively doesn't use it
-        mov byte [eax + (terminal_cursorattr - GVCT_START)], bl
-
-        ; clear the screen with the new attribute byte
-        ; FCALL CLS
-
-        mov eax, [0x7c20] ; reload GVCT
-
-        ; set cursor pos and display the cursor
         DPOPR ecx
-        mov byte [eax + (terminal_cursorattr - GVCT_START)], cl
-        DPOPR ebx
-        mov word [eax + (terminal_cursor - GVCT_START)], bx
-        mov byte [0xb8001 + ebx * 2], cl ; display cursor
+        DPOPR edx
+
+        ; set up variables
+        mov [eax + (terminal_console - GVCT_START)], ebx
+        mov byte [eax + (terminal_attr - GVCT_START)], cl
+        mov byte [eax + (terminal_cursorattr - GVCT_START)], dl
+        mov ch, cl
+        mov cl, 0x20
+        mov word [eax + (terminal_cursorbuf - GVCT_START)], cx
+
+        ; display cursor
+        mov dh, dl
+        mov dl, 0x20
+        DPUSH edx
+        DPUSH dword [eax + (terminal_cursor - GVCT_START)]
+        DPUSH dword [eax + (terminal_console - GVCT_START)]
+        FCALL RENDER_GLYPH
+        DPOP
+
+        ; TODO: should clear the screen once I implement CLS
 
         ; mark the terminal as the keycode consumer and initialize key buf
         DPUSH 1
@@ -1790,11 +1791,13 @@ START_SECTION IMPL_TABLE
         cmp esi, -1
         je .fail
 
+        mov eax, [0x7c20]
         mov dword [eax + (kbd_driver_key_buf - GVCT_START)], esi
         mov byte [eax + (kbd_driver_consumer_task - GVCT_START)], 2
 
         FCALL RING_INIT
 
+        ; initialize character buffer
         DPUSH 1
         DPUSH 256
         DPUSH 256 + 16
@@ -1802,6 +1805,7 @@ START_SECTION IMPL_TABLE
         cmp esi, -1
         je .fail
 
+        mov eax, [0x7c20]
         mov dword [eax + (terminal_cbuf - GVCT_START)], esi
         mov dword [eax + (terminal_cbuf_rlimit - GVCT_START)], 0
 
@@ -1821,6 +1825,8 @@ START_SECTION IMPL_TABLE
 
     ; clear the screen
     IMPL_PRIM CLS, 1
+        ret ; TODO: redo this for the new console abstraction
+
         mov eax, [0x7c20]
         mov word [eax + (terminal_cursor - GVCT_START)], 0 ; reset cursor
 
@@ -1853,14 +1859,14 @@ START_SECTION IMPL_TABLE
         movzx ebx, word [eax + (terminal_cursorbuf - GVCT_START)]
         DPUSH ebx
         DPUSH dword [eax + (terminal_cursor - GVCT_START)]
-        DPUSH dword [eax + (console - GVCT_START)]
+        DPUSH dword [eax + (terminal_console - GVCT_START)]
         FCALL RENDER_GLYPH
         DPOP
 
         ; get console size, this decides where to put the cursor,
         ; and how to copy backwards
         mov eax, [0x7c20]
-        DPUSH dword [eax + (console - GVCT_START)]
+        DPUSH dword [eax + (terminal_console - GVCT_START)]
         FCALL QUERY_SIZE
 
         ; shift cursor back one line
@@ -1870,7 +1876,6 @@ START_SECTION IMPL_TABLE
 
         ; copy lines backwards
         DPOPR ebx
-        DPUSH dword [eax + (console - GVCT_START)]
 
         mov ecx, ebx
         movzx ebx, bx ; column count
@@ -1905,12 +1910,12 @@ START_SECTION IMPL_TABLE
                 DSWAP
 
                 mov eax, [0x7c20]
-                DPUSH dword [eax + (console - GVCT_START)]
+                DPUSH dword [eax + (terminal_console - GVCT_START)]
                 FCALL QUERY_CELL
                 DSWAP
 
                 mov eax, [0x7c20]
-                DPUSH dword [eax + (console - GVCT_START)]
+                DPUSH dword [eax + (terminal_console - GVCT_START)]
                 FCALL RENDER_GLYPH
                 DPOP
 
@@ -1927,6 +1932,7 @@ START_SECTION IMPL_TABLE
             jmp .copy_line
         .endcpy:
 
+        ; empty the bottom line to get it ready for new text
         xor eax, eax
         .fill:
             DPUSH eax
@@ -1945,7 +1951,7 @@ START_SECTION IMPL_TABLE
             DPUSH ebx
             DSWAP
 
-            DPUSH dword [eax + (console - GVCT_START)]
+            DPUSH dword [eax + (terminal_console - GVCT_START)]
             FCALL RENDER_GLYPH
             DPOP
 
@@ -1957,46 +1963,102 @@ START_SECTION IMPL_TABLE
             inc eax
             cmp eax, ebx
             jne .fill
+
+        ; re-render cursor now that scrolling's done
+        mov eax, [0x7c20]
+        mov bh, byte [eax + (terminal_cursorattr - GVCT_START)]
+        mov bl, 0x20
+        movzx ebx, bx
+        DPUSH ebx
+        DPUSH dword [eax + (terminal_cursor - GVCT_START)]
+        DPUSH dword [eax + (terminal_console - GVCT_START)]
+        FCALL RENDER_GLYPH
+        DPOP
         ret
     END_IMPL
 
     ; move the cursor back one position
     IMPL_PRIM TERM_BACKSPACE, 1
         mov eax, [0x7c20]
-        movzx ecx, word [eax + terminal_cursor - GVCT_START]
-        mov bl, byte [eax + (terminal_attr - GVCT_START)]
-        mov dl, byte [eax + (terminal_cursorattr - GVCT_START)]
 
         ; make sure that we can go backwards
-        test ecx, ecx
+        cmp dword [eax + (terminal_cursor - GVCT_START)], 0
         jnz .good
         ret
 
         .good:
-            mov byte [0xb8001 + ecx*2], bl
-            mov byte [0xb8001 + ecx*2 - 1*2], dl
-            dec word [eax + (terminal_cursor - GVCT_START)]
+            ; undisplay old cursor position
+            movzx ebx, word [eax + (terminal_cursorbuf - GVCT_START)]
+            DPUSH ebx
+            DPUSH dword [eax + (terminal_cursor - GVCT_START)]
+            DPUSH dword [eax + (terminal_console - GVCT_START)]
+            FCALL RENDER_GLYPH
+            DPOP
+
+            ; dec either x or y position
+            mov eax, [0x7c20]
+            cmp word [eax + (terminal_cursor - GVCT_START)], 0
+            je .line_dec
+
+            .char_dec:
+                dec word [eax + (terminal_cursor - GVCT_START)]
+                jmp .after_dec
+            .line_dec:
+                dec word [eax + (terminal_cursor - GVCT_START) + 2]
+                mov word [eax + (terminal_cursor - GVCT_START)], 0
+            .after_dec:
+
+            ; get contents of cell that we're about to overwrite
+            DPUSH dword [eax + (terminal_cursor - GVCT_START)]
+            DPUSH dword [eax + (terminal_console - GVCT_START)]
+            FCALL QUERY_CELL
+            mov eax, [0x7c20]
+            mov word [eax + (terminal_cursorbuf - GVCT_START)], si ; save it
+            DPOP
+
+            ; overwrite with new cursor pos
+            mov bh, byte [eax + (terminal_cursorattr - GVCT_START)]
+            mov bl, 0x20
+            movzx ebx, bx
+            DPUSH ebx
+            DPUSH dword [eax + (terminal_cursor - GVCT_START)]
+            DPUSH dword [eax + (terminal_console - GVCT_START)]
+            FCALL RENDER_GLYPH
+            DPOP
             ret
     END_IMPL
 
     ; move the cursor back to the start of the line
     IMPL_PRIM TERM_CR, 1
-        mov ebx, [0x7c20]
+        ; undisplay old cursor position
+        mov eax, [0x7c20]
+        movzx ebx, word [eax + (terminal_cursorbuf - GVCT_START)]
+        DPUSH ebx
+        DPUSH dword [eax + (terminal_cursor - GVCT_START)]
+        DPUSH dword [eax + (terminal_console - GVCT_START)]
+        FCALL RENDER_GLYPH
+        DPOP
 
-        ; TOS = eax / 80 * 80, eax = cursor
-        movzx eax, word [ebx + (terminal_cursor - GVCT_START)]
-        DPUSH eax
-        mov ecx, 80
-        xor edx, edx
-        div ecx
-        mul ecx
+        ; move to start of line
+        mov eax, [0x7c20]
+        mov word [eax + (terminal_cursor - GVCT_START)], 0
 
-        ; move the cursor
-        mov cl, byte [ebx + (terminal_attr - GVCT_START)]
-        mov dl, byte [ebx + (terminal_cursorattr - GVCT_START)]
-        mov byte [0xb8001 + esi*2], cl
-        mov byte [0xb8001 + eax*2], dl
-        mov word [ebx + (terminal_cursor - GVCT_START)], ax
+        ; get contents of cell that we're about to overwrite
+        DPUSH dword [eax + (terminal_cursor - GVCT_START)]
+        DPUSH dword [eax + (terminal_console - GVCT_START)]
+        FCALL QUERY_CELL
+        mov eax, [0x7c20]
+        mov word [eax + (terminal_cursorbuf - GVCT_START)], si ; save it
+        DPOP
+
+        ; overwrite with new cursor pos
+        mov bh, byte [eax + (terminal_cursorattr - GVCT_START)]
+        mov bl, 0x20
+        movzx ebx, bx
+        DPUSH ebx
+        DPUSH dword [eax + (terminal_cursor - GVCT_START)]
+        DPUSH dword [eax + (terminal_console - GVCT_START)]
+        FCALL RENDER_GLYPH
         DPOP
         ret
     END_IMPL
@@ -2005,28 +2067,52 @@ START_SECTION IMPL_TABLE
     IMPL_PRIM TERM_LN, 1
         mov eax, [0x7c20]
 
-        ; scroll if needed
-        cmp word [eax + (terminal_cursor - GVCT_START)], 1920
-        jb .after_scroll
+        ; make sure that we can go forwards, if not, scroll first
+        DPUSH dword [eax + (terminal_console - GVCT_START)]
+        FCALL QUERY_SIZE
+        mov eax, [0x7c20]
+        DPOPR ebx
+        shr ebx, 16
+        dec ebx
+        cmp word [eax + (terminal_cursor - GVCT_START) + 2], bx
+        jb .good
             FCALL SCROLL
-        .after_scroll:
+        .good:
+            ; undisplay old cursor position
+            mov eax, [0x7c20]
+            movzx ebx, word [eax + (terminal_cursorbuf - GVCT_START)]
+            DPUSH ebx
+            DPUSH dword [eax + (terminal_cursor - GVCT_START)]
+            DPUSH dword [eax + (terminal_console - GVCT_START)]
+            FCALL RENDER_GLYPH
+            DPOP
 
-        ; update displayed cursor
-        movzx ecx, word [eax + (terminal_cursor - GVCT_START)]
-        mov bl, byte [eax + (terminal_attr - GVCT_START)]
-        mov dl, byte [eax + (terminal_cursorattr - GVCT_START)]
-        mov byte [0xb8001 + ecx*2], bl
-        mov byte [0xb8001 + ecx*2 + 80*2], dl
+            ; inc y position
+            mov eax, [0x7c20]
+            inc word [eax + (terminal_cursor - GVCT_START) + 2]
 
-        ; update saved cursor
-        add word [eax + (terminal_cursor - GVCT_START)], 80
-        ret
+            ; get contents of cell that we're about to overwrite
+            DPUSH dword [eax + (terminal_cursor - GVCT_START)]
+            DPUSH dword [eax + (terminal_console - GVCT_START)]
+            FCALL QUERY_CELL
+            mov eax, [0x7c20]
+            mov word [eax + (terminal_cursorbuf - GVCT_START)], si ; save it
+            DPOP
+
+            ; overwrite with new cursor pos
+            mov bh, byte [eax + (terminal_cursorattr - GVCT_START)]
+            mov bl, 0x20
+            movzx ebx, bx
+            DPUSH ebx
+            DPUSH dword [eax + (terminal_cursor - GVCT_START)]
+            DPUSH dword [eax + (terminal_console - GVCT_START)]
+            FCALL RENDER_GLYPH
+            DPOP
+            ret
     END_IMPL
 
     ; print a character to the console
     IMPL_PRIM PUTC, 1
-        mov eax, [0x7c20]
-
         cmp esi, 8 ; \b
         je .backspace
         cmp esi, 13 ; \r
@@ -2034,14 +2120,12 @@ START_SECTION IMPL_TABLE
         cmp esi, 10 ; \n
         je .ln
 
-        ; scroll first if needed
-        cmp word [eax + (terminal_cursor - GVCT_START)], 1999 ; since the cursor is one ahead of the text we do 1999 instead of 2000
-        jb .after_scroll
-        FCALL SCROLL
-        .after_scroll:
-
         ; print char
         .char:
+            ; TODO: reworking terminal
+            DPOP
+            ret
+
             mov eax, [0x7c20]
 
             ; load values
@@ -2811,6 +2895,7 @@ START_SECTION GVCT
     terminal_cursorbuf dw 0 ; holds what the cell "under" the cursor should display
 
     terminal_cbuf dd 0 ; input buffer for characters
+    terminal_console dd 0 ; console used by the terminal
     terminal_cbuf_rlimit dd 0 ; terminal_cbuf ring buffer's head as visible to applications
     terminal_cbuf_consumer db 0 ; bit index to set when terminal data becomes available
 
