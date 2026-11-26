@@ -1183,20 +1183,49 @@ START_SECTION IMPL_TABLE
 
     ; process commands (placeholder at the moment, just prints character codes)
     IMPL_PRIM SHELL, 1
-        .loop:
+        mov eax, [0x7c20]
+        cmp byte [eax + (shell_state - GVCT_START)], 0
+        je .prompt
+        cmp byte [eax + (shell_state - GVCT_START)], 1
+        je .inp_loop
+
+        .err:
+            and dword [eax + (pending_work - GVCT_START)], ~(1 << 3)
+            mov byte [eax + (shell_state - GVCT_START)], 0
+
+            lea ebx, [eax + (shell_err  - GVCT_START)]
+            DPUSH ebx
+            DPUSH dword [eax + (shell_errlen - GVCT_START)]
+            FCALL PUTS
+            jmp .end
+
+        .prompt:
+            and dword [eax + (pending_work - GVCT_START)], ~(1 << 3)
+            mov byte [eax + (shell_state - GVCT_START)], 1
+
+            lea ebx, [eax + (shell_ok - GVCT_START)]
+            DPUSH ebx
+            DPUSH dword [eax + (shell_oklen - GVCT_START)]
+            FCALL PUTS
+            jmp .end
+
+        .inp_loop:
             FCALL GETC
             DPOPR eax
             cmp eax, -1
-            je .end
+            je .end_inp_loop
 
             DPUSH eax
             FCALL PUTC
 
-            jmp .loop
+            jmp .inp_loop
+
+        .end_inp_loop:
+            mov eax, [0x7c20]
+            mov byte [eax + (shell_state - GVCT_START)], 0
+            jmp .end
 
         .end:
-        mov eax, [0x7c20]
-        and dword [eax + (pending_work - GVCT_START)], ~(1 << 3)
         ret
     END_IMPL
 
@@ -1881,8 +1910,8 @@ START_SECTION IMPL_TABLE
 
         ; shift cursor back one line
         mov eax, [0x7c20]
-        sub word [eax + (terminal_cursor_y - GVCT_START)], 1
-        adc word [eax + (terminal_cursor_y - GVCT_START)], 0
+        sub word [eax + (terminal_cursor - GVCT_START) + 2], 1
+        adc word [eax + (terminal_cursor - GVCT_START) + 2], 0
 
         ; copy lines backwards
         DPOPR ebx
@@ -2317,6 +2346,8 @@ START_SECTION IMPL_TABLE
     IMPL_PRIM SHELL_INIT, 1
         mov eax, [0x7c20]
         mov byte [eax + (terminal_cbuf_consumer - GVCT_START)], 3 ; we are task 3
+        or dword [eax + (pending_work - GVCT_START)], 1 << 3
+        mov byte [eax + (shell_state - GVCT_START)], 0 ; start in the PROMPT state
         ret
     END_IMPL
 
@@ -2958,8 +2989,8 @@ START_SECTION GVCT
     ; taken as argument by functions like render_glyph(),
     ; or you can manipulate individual fields
     terminal_cursor:
-    terminal_cursor_x dw 0
-    terminal_cursor_y dw 0
+    dw 0
+    dw 0
 
     terminal_attr db 0 ; attribute byte to use for characters
     terminal_cursorattr db 0 ; attribute byte to use for the cell the cursor is on
@@ -2969,6 +3000,13 @@ START_SECTION GVCT
     terminal_console dd 0 ; console used by the terminal
     terminal_cbuf_rlimit dd 0 ; terminal_cbuf ring buffer's head as visible to applications
     terminal_cbuf_consumer db 0 ; bit index to set when terminal data becomes available
+
+    ; shell / forth interpreter
+    shell_state db 0
+    shell_ok db "ok> "
+    shell_oklen dd $ - shell_ok
+    shell_err db "err> "
+    shell_errlen dd $ - shell_err
 
     ; kernel messages
     greeting db "FIF IMG REVISION 1", 10
