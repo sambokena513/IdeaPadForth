@@ -144,6 +144,11 @@ org 0 ; not actually loaded at 0x00000000, but this gives us simple relative lab
 ; get the word descriptor index of a label
 %define WDIDX(x) (((x %+ _WD - $$) - (WD_TABLE_START - $$)) / 12)
 
+%macro string 1+
+    dd %strlen(%1)
+    db %1
+%endmacro
+
 %define TRUE -1
 %define FALSE 0
 
@@ -449,12 +454,12 @@ START_SECTION IMPL_TABLE
         cmp ebx, -1
         je .fail
         mov eax, [0x7c20]
-        mov [eax + (terminal_console - GVCT_START)], ebx
+        mov [eax + (console - GVCT_START)], ebx
 
         ; initialize terminal
         DPUSH 0x77 ; cursor attr
         DPUSH 0x07 ; attribute byte
-        DPUSH dword [eax + (terminal_console - GVCT_START)]
+        DPUSH dword [eax + (console - GVCT_START)]
         FCALL TERMINAL_INIT
         DPOPR ebx
         cmp ebx, -1
@@ -462,8 +467,8 @@ START_SECTION IMPL_TABLE
 
         ; print greeting message
         mov eax, [0x7c20]
-        mov ebx, [eax + (greeting_len - GVCT_START)]
-        lea eax, [eax + (greeting - GVCT_START)]
+        mov ebx, [eax + (greetingmsg - GVCT_START)]
+        lea eax, [eax + (greetingmsg - GVCT_START) + 4]
         DPUSH eax
         DPUSH ebx
         FCALL PUTS
@@ -553,8 +558,8 @@ START_SECTION IMPL_TABLE
         FCALL PUTC
 
         mov eax, [0x7c20]
-        mov ebx, [eax + (initmsg_len - GVCT_START)]
-        lea eax, [eax + (initmsg - GVCT_START)]
+        mov ebx, [eax + (initmsg - GVCT_START)]
+        lea eax, [eax + (initmsg - GVCT_START) + 4]
         DPUSH eax
         DPUSH ebx
         FCALL PUTS
@@ -573,13 +578,6 @@ START_SECTION IMPL_TABLE
     IMPL_PRIM KMAIN, 1
         PROLOGUE
         ; a simple superloop that calls all of the work handlers which have pending work
-
-        mov eax, [0x7c20]
-        DPUSH '*' | (0x07 << 8)
-        DPUSH 24 | (10 << 16)
-        DPUSH [eax + (console - GVCT_START)]
-        FCALL RENDER_GLYPH
-
         mov eax, [0x7c20]
         .main_loop:
             test dword [eax + (pending_work - GVCT_START)], 1 << 0
@@ -1222,9 +1220,9 @@ START_SECTION IMPL_TABLE
             and dword [eax + (pending_work - GVCT_START)], ~(1 << 3)
             mov byte [eax + (shell_state - GVCT_START)], 0
 
-            lea ebx, [eax + (shell_err  - GVCT_START)]
+            lea ebx, [eax + (shell_err - GVCT_START) + 4]
             DPUSH ebx
-            DPUSH dword [eax + (shell_errlen - GVCT_START)]
+            DPUSH dword [eax + (shell_err - GVCT_START)]
             FCALL PUTS
             jmp .end
 
@@ -1232,9 +1230,9 @@ START_SECTION IMPL_TABLE
             and dword [eax + (pending_work - GVCT_START)], ~(1 << 3)
             mov byte [eax + (shell_state - GVCT_START)], 1
 
-            lea ebx, [eax + (shell_ok - GVCT_START)]
+            lea ebx, [eax + (shell_ok - GVCT_START) + 4]
             DPUSH ebx
-            DPUSH dword [eax + (shell_oklen - GVCT_START)]
+            DPUSH dword [eax + (shell_ok - GVCT_START)]
             FCALL PUTS
             jmp .end
 
@@ -1283,9 +1281,9 @@ START_SECTION IMPL_TABLE
 
         ; print error message
         mov eax, [0x7c20]
-        lea ebx, [eax + (oops_msg - GVCT_START)]
+        lea ebx, [eax + (oopsmsg - GVCT_START) + 4]
         DPUSH ebx
-        DPUSH dword [eax + (oops_len - GVCT_START)]
+        DPUSH dword [eax + (oopsmsg - GVCT_START)]
         FCALL TERM_RESET
         FCALL PUTS
         FCALL PUTS
@@ -1551,9 +1549,9 @@ START_SECTION IMPL_TABLE
             mov ebx, [edi + WDIDX(OOPS) * 12]
             mov [esp], ebx
 
-            lea ebx, [eax + (watchdog_msg - GVCT_START)]
+            lea ebx, [eax + (watchdogmsg - GVCT_START) + 4]
             DPUSH ebx
-            DPUSH dword [eax + (watchdog_len - GVCT_START)]
+            DPUSH dword [eax + (watchdogmsg - GVCT_START)]
 
             ; send EOI
             mov al, PIC_EOI
@@ -3138,20 +3136,14 @@ START_SECTION GVCT
 
     ; shell / forth interpreter
     shell_state db 0
-    shell_ok db "ok> "
-    shell_oklen dd $ - shell_ok
-    shell_err db "err> "
-    shell_errlen dd $ - shell_err
+    shell_ok string `ok> `
+    shell_err string `err> `
 
     ; kernel messages
-    greeting db "FIF IMG REVISION 1", 10
-    greeting_len dd $ - greeting
-    initmsg db "Initialization complete. Entering main loop.", 10
-    initmsg_len dd $ - initmsg
-    oops_msg db "OOPS - an unrecoverable runtime error occured, rebooting in a few seconds.", 10, "Error message: "
-    oops_len dd $ - oops_msg
-    watchdog_msg db "Kernel soft lockup detected.", 10
-    watchdog_len dd $ - watchdog_msg
+    greetingmsg string `FIF IMG REVISION 1\n`
+    initmsg string `Initialization complete. Entering main loop.\n`
+    oopsmsg string `OOPS - An unrecoverable runtime error occurred, rebooting in a few seconds.\n Error description: `
+    watchdogmsg string `Kernel soft lockup detected.\n`
 
     ; struct used by the jmp far in INIT to reload CS
     init_jmpptr:
