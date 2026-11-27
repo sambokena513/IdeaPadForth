@@ -515,6 +515,9 @@ START_SECTION IMPL_TABLE
 
         ; initialize command interpreter
         FCALL SHELL_INIT
+        DPOPR ebx
+        cmp ebx, -1
+        je .fail
 
         ; print out kernel arena memory
         mov eax, [0x7c20]
@@ -2440,6 +2443,25 @@ START_SECTION IMPL_TABLE
         mov byte [eax + (terminal_cbuf_consumer - GVCT_START)], 3 ; we are task 3
         or dword [eax + (pending_work - GVCT_START)], 1 << 3
         mov byte [eax + (shell_state - GVCT_START)], 0 ; start in the PROMPT state
+
+        DPUSH 8192
+        FCALL KRESERVE
+        DPOPR ebx
+        cmp ebx, -1
+        je .fail
+
+        mov eax, [0x7c20]
+        mov [eax + (shell_dstack - GVCT_START)], ebx
+        add ebx, 8192
+        mov [eax + (shell_rstack - GVCT_START)], ebx
+
+        .end:
+        DPUSH 0
+        EPILOGUE
+        ret
+
+        .fail:
+        DPUSH -1
         EPILOGUE
         ret
     END_IMPL
@@ -3138,6 +3160,12 @@ START_SECTION GVCT
     shell_state db 0
     shell_ok string `ok> `
     shell_err string `err> `
+    ; data and return stack used for the interactive environment
+    ; that words executed by the shell run in (not the normal stack
+    ; since that'd corrupt the kernel stack as soon as you pushed
+    ; even one number onto it)
+    shell_dstack dd 0
+    shell_rstack dd 0
 
     ; kernel messages
     greetingmsg string `FIF IMG REVISION 1\n`
