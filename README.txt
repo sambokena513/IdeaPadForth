@@ -111,19 +111,21 @@ Language design:
             and CALL IR instructions, emitting this code for each:
 
                 LIT:
-                    mov [ebp], imm32
+                    mov dword ptr [ebp], esi
+                    mov esi, imm32
                     add ebp, 4
 
                 0BRANCH:
                     sub ebp, 4
-                    cmp [ebp], 0
+                    cmp esi, 0
+                    mov esi, [ebp]
                     je rel32
 
                 BRANCH:
                     jmp rel32
 
                 CALL:
-                    call [edi + WORD_DESC_SIZE*WORD_DESC]
+                    call dword ptr [edi + WORD_DESC_SIZE*WORD_DESC]
                          (note that since this is a constant calculation,
                           the actual encoding is edi + disp32)
 
@@ -171,10 +173,21 @@ Language design:
                 evaluate to +1, not -1.
 
             Caller/Callee-saved Registers and Reserved Registers:
-                caller-saved - eax, ebx, ecx, edx
-                callee-saved - none
+                caller-saved - eax, ebx, ecx
+                callee-saved - edx* (kind of, it needs to be saved in a
+                specific way)
 
                 reserved - esi (TOS), edi (WD_TABLE start), ebp (&NOS + 4), esp (return stack)
+
+                EDX Explanation / Return Stack Frames:
+                    edx is callee-saved but defined as having to be saved and
+                    restored using a single `push edx` instruction at the
+                    start of a function, and `pop edx` before every return.
+
+                    This means the return stack is defined as always
+                    consisting of 8-byte entries with the first 4 bytes being
+                    the saved value of edx, and the next 4 being the eip to
+                    return to.
 
                 Rationale:
                     Function arguments go through the stack anyway so overhead
@@ -182,9 +195,28 @@ Language design:
                     registers, and if we split them evenly we only get 2
                     registers for use in leaf functions.
 
-                    By giving all four to leaf node functions we can make
+                    By giving three to leaf node functions we can make
                     primitives noticeably faster (as well as some non-primitives
                     if we do inlining), and lose almost nothing.
+
+                    Why not just make all four caller-saved then? Well, this
+                    is less of a performance issue and more of a fundamental
+                    property of our execution; notice the 4 reserved
+                    registers. Not a single one of them is any kind of "base"
+                    pointer for addressing local variables in a function.
+                    And precisely this is the reason we need at least one
+                    callee-saved register.
+
+                    While a function without any locals (one that keeps
+                    everything on the data stack, or only calls functions with
+                    predictable stack effects and saves/restores registers
+                    around them) doesn't *need* to use it for this, in
+                    practice if a function wants local variables with
+                    predictable offsets, it *must* use edx as the base pointer.
+
+                    And why is this so weird? Because I had to change it 2
+                    months into the implementation after realizing that
+                    caller-saved edx would be a problem.
 
     Parallelism/Concurrency:
         Not a built-in language feature, though the planned library-level

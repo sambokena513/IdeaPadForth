@@ -49,7 +49,7 @@ Features to add (in no particular order):
       handle things like translating characters (lf becomes crlf for instance),
       and be able to support copy-paste as well as mouse selections, as well
       as actually have line-buffering be optional so that apps requiring raw
-      input don't have to deal with line semantics.
+      input don't have to deal with line semantics. (in progress)
 
     - Later on after memory allocation and drivers are a bit better, make a
       proper scheduler.
@@ -93,3 +93,50 @@ Major architecture features / subsystems to implement:
       this doesn't mean we literally need to juggle these large structs in the
       buddy allocator or page frame allocator, those can work with PHYS / 4096,
       or in other words, the page frame number rather than the address.
+
+Critical Issues:
+
+    - Stack frames. Like an absolute idiot, when I was designing my runtime I
+      decided on 4 runtime-reserved registers and the other 4 being
+      caller-saved. The issue is that without even a single callee-saved
+      register it is impossible to save a base pointer without going through
+      several layers of indirection and putting it in a global variable.
+
+      There are three ways to deal with this:
+            a) Accept it and deal with the fact that everything will be slow
+               as shit since all function calls get one practically guaranteed
+               cache miss. (no way am I doing that, I designed this to be
+               capable of being optimized)
+
+            b) Pick one of those registers to become callee-saved. In theory a
+               good idea and what I should have done from the start, but in
+               practice I cannot magically take 4000 lines of assembly code
+               and make all of it follow an entirely new calling convention.
+
+            c) Use the return stack. In theory it should be easy enough to
+               regex my way through the codebase and add a single `push ebp`
+               to the start of every function and a `pop %reg` on the
+               caller-side. It's not as slow at runtime as option a, not as
+               slow to implement as option b, but not as performant as b, and
+               will increase code size.
+
+    Honestly, I don't think option b would even be that much more performant.
+    In practice 4 live values is the exact amount that a lot of simple
+    functions use, I'd lose a lot of performance if I took away that
+    register... But maybe there's another option. I present, option d:
+
+        d) A hybrid of b and c, we use a callee-saved register, but make the
+           return stack the mechanism by which it is restored. Most likely
+           edx, since all functions currently treat eax, ebx, ecx, and edx as
+           undefined after a function call, this would not impact existing
+           calls at all, we simply add `push edx` at the start of every
+           function and `pop edx` at the end. It's only 2 instructions per
+           function, and only for functions that modify edx, and it keeps
+           words that walk the return stack relatively simple, as they can
+           always treat it as a simple 8-byte struct with a frame base value
+           and an instruction pointer value. And this also means that while
+           edx becomes the frame base for locals for instance, functions that
+           *don't* use edx for that still work fine since they can otherwise
+           treat it as caller-saved, and new functions for the ABI can use edx
+           as an accumulator register if they don't need it for locals, since
+           any operations done on it are now retained across calls.
