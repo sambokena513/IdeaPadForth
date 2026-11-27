@@ -1753,9 +1753,6 @@ START_SECTION IMPL_TABLE
         movzx ebx, bx
         add eax, ebx
 
-        ; render into shadow buffer
-        mov word [ecx + 8 + eax*4], si
-
         ; load the mapping/flag word into ebx
         movzx ebx, word [ecx + 8 + eax*4 + 2]
 
@@ -1765,21 +1762,31 @@ START_SECTION IMPL_TABLE
 
         .not_displayed:
             or word [ecx + 8 + eax*4 + 2], 1 << 15 ; set dirty flag
+
+            ; render into shadow buffer
+            mov word [ecx + 8 + eax*4], si
+
             xor esi, esi
             EPILOGUE
             ret
 
         .displayed:
-            ; clear dirty flag just in case it was set
-            ; (though it shouldn't've been)
-            and word [ecx + 8 + eax*4 + 2], ~(1 << 15)
-
             ; and out the flags so bx contains just the VGA index
             and ebx, ~(1 << 15 | 1 << 14)
 
-            ; finally, write to VGA memory
+            ; this part is just an optimization because of something I noticed,
+            ; apps (like the terminal when scrolling) often try to logically move
+            ; character cells even when both positions actually have the same content,
+            ; thus skipping the rendering and display step for calls that would have no
+            ; effect should make use of the console a lot faster (since VGA writes are slow)
+            cmp word [ecx + 8 + eax*4], si
+            je .end
+
+            ; render and display
+            mov word [ecx + 8 + eax*4], si
             mov word [0xb8000 + ebx*2], si
 
+            .end:
             xor esi, esi
             EPILOGUE
             ret
