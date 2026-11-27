@@ -147,6 +147,18 @@ org 0 ; not actually loaded at 0x00000000, but this gives us simple relative lab
 %define TRUE -1
 %define FALSE 0
 
+; function prologues and epilogues, remember that esp is not allowed to be used
+; for preserving arbitrary values, only PROLOGUE and FCALL can write to it, and
+; only EPILOGUE and ret can read from it!
+
+%macro PROLOGUE 0
+    push edx
+%endmacro
+
+%macro EPILOGUE 0
+    pop edx
+%endmacro
+
 ; push a value to the data stack
 %macro DPUSH 1
     mov dword [ebp], esi
@@ -559,6 +571,7 @@ START_SECTION IMPL_TABLE
 
     ; main loop
     IMPL_PRIM KMAIN, 1
+        PROLOGUE
         ; a simple superloop that calls all of the work handlers which have pending work
 
         mov eax, [0x7c20]
@@ -638,6 +651,10 @@ START_SECTION IMPL_TABLE
             .work:
             sti
             jmp .main_loop
+
+        ; unreachable, but we have to be ABI compliant
+        EPILOGUE
+        ret
     END_IMPL
 
     ; timer hook, this function really just exists to reserve the wd idx,
@@ -645,6 +662,7 @@ START_SECTION IMPL_TABLE
     ; on every timer tick, this implementation just increments the top-right of the screen,
     ; serving as a kind of OS "heartbeat" so you know if it actually stalled or is just waiting
     IMPL_PRIM TIMER_HOOK, 1
+        PROLOGUE
         mov eax, [0x7c20]
 
         ; load tick counter
@@ -678,6 +696,7 @@ START_SECTION IMPL_TABLE
 
         and dword [eax + (pending_work - GVCT_START)], ~(1 << 0)
         sti
+        EPILOGUE
         ret
     END_IMPL
 
@@ -685,6 +704,7 @@ START_SECTION IMPL_TABLE
     ; a key event in this system is an 8-bit integer consisting of a 7-bit keycode from 1 to 127 (0 is reserved),
     ; and a top flag bit that is clear for key *presses* and set for key *releases*.
     IMPL_PRIM KEYBOARD_DRIVER, 1
+        PROLOGUE
         .dequeue:
             mov eax, [0x7c20]
 
@@ -921,10 +941,12 @@ START_SECTION IMPL_TABLE
         .end_dequeue:
         and dword [eax + (pending_work - GVCT_START)], ~(1 << 1) ; clear pending work bit for IRQ 1
         sti
+        EPILOGUE
         ret
 
         ; small helper for emitting a keycode, assumes edx = keycode and eax = GVCT_START
         .emit_keycode:
+            PROLOGUE
             ; set pending work for keycode consumer
             movzx ebx, byte [eax + (kbd_driver_consumer_task - GVCT_START)]
             bts dword [eax + (pending_work - GVCT_START)], ebx
@@ -950,6 +972,7 @@ START_SECTION IMPL_TABLE
                 mov byte [eax + (kbd_driver_state - GVCT_START)], KBD_DRVR_ERR
 
             .emit_keycode_end:
+                EPILOGUE
                 ret
     END_IMPL
 
@@ -958,6 +981,7 @@ START_SECTION IMPL_TABLE
     ; (temporary, in the future this should also fill up a line buffer,
     ; and the echo functionality should be optional)
     IMPL_PRIM TERMINAL_DRIVER, 1
+        PROLOGUE
         .loop:
             mov eax, [0x7c20]
 
@@ -1134,10 +1158,12 @@ START_SECTION IMPL_TABLE
 
         .end:
             and dword [eax + (pending_work - GVCT_START)], ~(1 << 2) ; clear pending work for terminal
+            EPILOGUE
             ret
 
         ; helper for attempting to enqueue and print a character, assumes character is in ebx
         .emit_char:
+            PROLOGUE
             ; in case a line was just submitted with no space left
             DPUSH ebx
             DPUSH dword [eax + (terminal_cbuf - GVCT_START)]
@@ -1152,6 +1178,7 @@ START_SECTION IMPL_TABLE
                 ; available data to read
                 movzx ebx, byte [eax + (terminal_cbuf_consumer - GVCT_START)]
                 bts dword [eax + (pending_work - GVCT_START)], ebx
+                EPILOGUE
                 ret
 
             .emit_char_try:
@@ -1178,11 +1205,13 @@ START_SECTION IMPL_TABLE
                 mov eax, [0x7c20]
                 mov edx, [eax + (terminal_cbuf - GVCT_START)]
                 inc dword [edx + 12]
+                EPILOGUE
                 ret
     END_IMPL
 
     ; process commands (placeholder at the moment, just prints character codes)
     IMPL_PRIM SHELL, 1
+        PROLOGUE
         mov eax, [0x7c20]
         cmp byte [eax + (shell_state - GVCT_START)], 0
         je .prompt
@@ -1226,6 +1255,7 @@ START_SECTION IMPL_TABLE
             jmp .end
 
         .end:
+        EPILOGUE
         ret
     END_IMPL
 
@@ -1246,6 +1276,9 @@ START_SECTION IMPL_TABLE
 
     ; takes string to print
     IMPL_PRIM OOPS, 1
+        ; no ret here, but intermediate calls still need it
+        ; to be ABI-compliant up to that point, so we need this
+        PROLOGUE
         cli
 
         ; print error message
@@ -1298,10 +1331,13 @@ START_SECTION IMPL_TABLE
     END_IMPL
 
     IMPL_PRIM STRESS, 1
+        ; TODO: when I implement this,
+        ; there shouldn't be a prologue or epilogue since STRESS is not allowed to make function calls
         ret
     END_IMPL
 
     IMPL_PRIM PANIC, 1
+        ; no prologue or epilogue because PANIC does not perform function calls
         cli
 
         ; make it *very* noticeable that the kernel crashed
@@ -1347,6 +1383,7 @@ START_SECTION IMPL_TABLE
     ; IRQs and exceptions first for safety. Also, you will still need to unmask the IRQs
     ; that you want to receive.
     IMPL_PRIM INT_INIT, 1
+        PROLOGUE
         ; load IDT
         mov eax, [0x7c20]
         add dword [eax + (idtr - GVCT_START) + 2], eax
@@ -1417,6 +1454,7 @@ START_SECTION IMPL_TABLE
         mov eax, cr0
         or eax, 0x20
         mov cr0, eax
+        EPILOGUE
         ret
     END_IMPL
 
@@ -1427,6 +1465,7 @@ START_SECTION IMPL_TABLE
     ; like calling words with FCALL, ISRs set by SET_INT can have their impl change,
     ; but mismatched generation counters are not checked (only EXECUTE checks that)
     IMPL_PRIM SET_INT, 1
+        PROLOGUE
         ; set eax to the GVCT base
         mov eax, [0x7c20]
 
@@ -1458,8 +1497,13 @@ START_SECTION IMPL_TABLE
         ; set the disp32 field of the IDeT entry
         mov dword [eax + (idet_start - GVCT_START) + ebx * 8 + 2], ecx
 
+        EPILOGUE
         ret
     END_IMPL
+
+    ; note on interrupt handlers, they do not have traditional prologues or epilogues,
+    ; and they execute in a separate shared ISR stack, they are allowed to make function calls,
+    ; but not to non-reentrant functions
 
     ; irq 0 handler, increments a tick counter,
     ; also acts as a basic watchdog
@@ -1559,6 +1603,7 @@ START_SECTION IMPL_TABLE
     ; placeholder implementation, currently always returns a 50-line 40-column logical
     ; console mapped to the first VGA page
     IMPL_PRIM CONSOLE_INIT, 1
+        PROLOGUE
 
         ; allocate memory
         DPUSH 8 + 8000 ; 2000 character cells
@@ -1673,10 +1718,12 @@ START_SECTION IMPL_TABLE
             jne .map_row
 
         .end:
+            EPILOGUE
             ret
 
         .fail:
             DPUSH -1
+            EPILOGUE
             ret
     END_IMPL
 
@@ -1685,6 +1732,8 @@ START_SECTION IMPL_TABLE
     ; and glyph + attributes (packed into one word)
 
     IMPL_PRIM RENDER_GLYPH, 1
+        PROLOGUE
+
         DPOPR ecx ; console
         DPOPR ebx ; x and y coords
 
@@ -1717,6 +1766,7 @@ START_SECTION IMPL_TABLE
         .not_displayed:
             or word [ecx + 8 + eax*4 + 2], 1 << 15 ; set dirty flag
             xor esi, esi
+            EPILOGUE
             ret
 
         .displayed:
@@ -1731,10 +1781,12 @@ START_SECTION IMPL_TABLE
             mov word [0xb8000 + ebx*2], si
 
             xor esi, esi
+            EPILOGUE
             ret
 
         .fail:
             mov esi, 1
+            EPILOGUE
             ret
     END_IMPL
 
@@ -1743,14 +1795,17 @@ START_SECTION IMPL_TABLE
     ; it's best not to cache the result of this, but instead call it before every render_glyph() call to get
     ; the available size (which could in theory change at runtime)
     IMPL_PRIM QUERY_SIZE, 1
+        PROLOGUE
         DPOPR eax
         DPUSH dword [eax + 4]
         rol esi, 16
+        EPILOGUE
         ret
     END_IMPL
 
     ; given a console and x/y coordinates (packed in dword), return what is at that logical cell, or -1 on error
     IMPL_PRIM QUERY_CELL, 1
+        PROLOGUE
         DPOPR ecx ; console
         DPOPR ebx ; x and y coords
 
@@ -1774,10 +1829,12 @@ START_SECTION IMPL_TABLE
 
         .end:
             DPUSH edx
+            EPILOGUE
             ret
 
         .fail:
             DPUSH -1
+            EPILOGUE
             ret
     END_IMPL
 
@@ -1785,6 +1842,7 @@ START_SECTION IMPL_TABLE
     ; and attribute bytes to use for normal text and for the cursor
     ; returns 0 on success, or -1 on failure
     IMPL_PRIM TERMINAL_INIT, 1
+        PROLOGUE
         mov eax, [0x7c20]
 
         DPOPR ebx
@@ -1830,6 +1888,7 @@ START_SECTION IMPL_TABLE
         FCALL RING_INIT
 
         DPUSH 0
+        EPILOGUE
         ret
 
         .fail:
@@ -1838,12 +1897,14 @@ START_SECTION IMPL_TABLE
             DPOP
 
             DPUSH -1
+            EPILOGUE
             ret
     END_IMPL
 
     ; clear the screen of a logical console, takes console and the glyph-attribute
     ; pair to fill the console with
     IMPL_PRIM CLS, 1
+        PROLOGUE
         DPOPR ebx
 
         ; put number of loop iterations into eax
@@ -1888,11 +1949,13 @@ START_SECTION IMPL_TABLE
             jmp .loop
         .end:
 
+        EPILOGUE
         ret
     END_IMPL
 
     ; scroll the terminal back one line
     IMPL_PRIM SCROLL, 1
+        PROLOGUE
         ; stop displaying cursor by swapping it back with what's under it
         mov eax, [0x7c20]
         movzx ebx, word [eax + (terminal_cursorbuf - GVCT_START)]
@@ -2013,12 +2076,14 @@ START_SECTION IMPL_TABLE
         DPUSH dword [eax + (terminal_console - GVCT_START)]
         FCALL RENDER_GLYPH
         DPOP
+        EPILOGUE
         ret
     END_IMPL
 
     ; reset the cursor position of the terminal, and clear the screen
     ; with the current attribute bytes, then display the cursor
     IMPL_PRIM TERM_RESET, 1
+        PROLOGUE
         mov eax, [0x7c20]
         mov dword [eax + (terminal_cursor - GVCT_START)], 0
         mov ch, byte [eax + (terminal_attr - GVCT_START)]
@@ -2040,16 +2105,19 @@ START_SECTION IMPL_TABLE
         DPUSH dword [eax + (terminal_console - GVCT_START)]
         FCALL RENDER_GLYPH
         DPOP
+        EPILOGUE
         ret
     END_IMPL
 
     ; move the cursor back one position
     IMPL_PRIM TERM_BACKSPACE, 1
+        PROLOGUE
         mov eax, [0x7c20]
 
         ; make sure that we can go backwards
         cmp dword [eax + (terminal_cursor - GVCT_START)], 0
         jnz .good
+        EPILOGUE
         ret
 
         .good:
@@ -2091,11 +2159,13 @@ START_SECTION IMPL_TABLE
             DPUSH dword [eax + (terminal_console - GVCT_START)]
             FCALL RENDER_GLYPH
             DPOP
+            EPILOGUE
             ret
     END_IMPL
 
     ; move the cursor back to the start of the line
     IMPL_PRIM TERM_CR, 1
+        PROLOGUE
         ; undisplay old cursor position
         mov eax, [0x7c20]
         movzx ebx, word [eax + (terminal_cursorbuf - GVCT_START)]
@@ -2126,11 +2196,13 @@ START_SECTION IMPL_TABLE
         DPUSH dword [eax + (terminal_console - GVCT_START)]
         FCALL RENDER_GLYPH
         DPOP
+        EPILOGUE
         ret
     END_IMPL
 
     ; move the cursor down one line
     IMPL_PRIM TERM_LN, 1
+        PROLOGUE
         mov eax, [0x7c20]
 
         ; make sure that we can go forwards, if not, scroll first
@@ -2174,11 +2246,13 @@ START_SECTION IMPL_TABLE
             DPUSH dword [eax + (terminal_console - GVCT_START)]
             FCALL RENDER_GLYPH
             DPOP
+            EPILOGUE
             ret
     END_IMPL
 
     ; print a character to the console
     IMPL_PRIM PUTC, 1
+        PROLOGUE
         cmp esi, 8 ; \b
         je .backspace
         cmp esi, 13 ; \r
@@ -2206,6 +2280,7 @@ START_SECTION IMPL_TABLE
                 ; if no space, make space
                 FCALL TERM_CR
                 FCALL TERM_LN
+                EPILOGUE
                 ret
 
             .char_normal:
@@ -2239,6 +2314,7 @@ START_SECTION IMPL_TABLE
             DPUSH dword [eax + (terminal_console - GVCT_START)]
             FCALL RENDER_GLYPH
             DPOP
+            EPILOGUE
             ret
 
         ; escape sequences
@@ -2246,21 +2322,25 @@ START_SECTION IMPL_TABLE
             FCALL TERM_CR
             FCALL TERM_LN
             DPOP
+            EPILOGUE
             ret
 
         .cr:
             FCALL TERM_CR
             DPOP
+            EPILOGUE
             ret
 
         .backspace:
             FCALL TERM_BACKSPACE
             DPOP
+            EPILOGUE
             ret
     END_IMPL
 
     ; print a string to the console, arguments are length and strptr
     IMPL_PRIM PUTS, 1
+        PROLOGUE
         .loop:
             cmp esi, 0
             je .end
@@ -2278,11 +2358,13 @@ START_SECTION IMPL_TABLE
         .end:
         DPOP
         DPOP
+        EPILOGUE
         ret
     END_IMPL
 
     ; print a 32-bit unsigned hex integer, does not print the leading '0x' or a trailing '\n'
     IMPL_PRIM PUTH, 1
+        PROLOGUE
         mov ecx, 8
         .loop:
             rol esi, 4
@@ -2308,11 +2390,13 @@ START_SECTION IMPL_TABLE
             dec ecx
             jnz .loop
         DPOP
+        EPILOGUE
         ret
     END_IMPL
 
     ; get a character from the terminal, returns either the character, or 0 for no character
     IMPL_PRIM GETC, 1
+        PROLOGUE
         mov eax, [0x7c20]
 
         ; temporarily swap write idx with the read limit to avoid reading lines that haven't
@@ -2336,27 +2420,36 @@ START_SECTION IMPL_TABLE
         jnz .no_input
 
         DPUSH edx
+        EPILOGUE
         ret
 
         .no_input:
             DPUSH -1
+            EPILOGUE
             ret
     END_IMPL
 
     IMPL_PRIM SHELL_INIT, 1
+        PROLOGUE
         mov eax, [0x7c20]
         mov byte [eax + (terminal_cbuf_consumer - GVCT_START)], 3 ; we are task 3
         or dword [eax + (pending_work - GVCT_START)], 1 << 3
         mov byte [eax + (shell_state - GVCT_START)], 0 ; start in the PROMPT state
+        EPILOGUE
         ret
     END_IMPL
 
     ; dynamically resolve a word descriptor index and execute the function
     IMPL_PRIM EXECUTE, 1
+        PROLOGUE
         DPOPR eax
         xor edx, edx
         mov ecx, 12
         mul ecx
+        ; restore registers here so that the
+        ; PROLOGUE of the tail-called function
+        ; won't unbalance the stack
+        EPILOGUE
         jmp [edi + eax]
     END_IMPL
 
@@ -2369,6 +2462,7 @@ START_SECTION IMPL_TABLE
 
     ; TODO: should also split this into a separate keyboard and PS/2 driver
     IMPL_PRIM KEYBOARD_INIT, 1
+        PROLOGUE
         ; disable scanning on keyboard first just in case, because
         ; in testing sometimes disabling the port itself is not enough,
         ; and we still get scan codes interfering with the controller self-test
@@ -2522,10 +2616,12 @@ START_SECTION IMPL_TABLE
         mov dword [ebx + 12], 0
 
         DPUSH 0
+        EPILOGUE
         ret
 
         .fail:
             DPUSH -1
+            EPILOGUE
             ret
     END_IMPL
 
@@ -2549,6 +2645,7 @@ START_SECTION IMPL_TABLE
     ; initialize a ring buffer, takes the pointer to the ring buffer struct (must have at least 16 + capacity bytes of space)
     ; the requested size in bytes, and the requested element size (1, 2, or 4) in bytes
     IMPL_PRIM RING_INIT, 1
+        PROLOGUE
         DPOPR eax
         DPOPR ebx
         DPOPR ecx
@@ -2558,32 +2655,38 @@ START_SECTION IMPL_TABLE
         mov word [eax + 6], 0 ; err
         mov [eax + 8], 0 ; head
         mov [eax + 12], 0 ; tail
+        EPILOGUE
         ret
     END_IMPL
 
     ; reinitialize a ring buffer with its existing operand size and capacity, takes the ring buffer
     IMPL_PRIM RING_REINIT, 1
+        PROLOGUE
         DPOPR eax
 
         mov word [eax + 6], 0
         mov [eax + 8], 0 ; head
         mov [eax + 12], 0 ; tail
+        EPILOGUE
         ret
     END_IMPL
 
     ; check if a ring buffer is empty (returns zero for not empty and nonzero for empty), takes the pointer to the ring buffer struct
     IMPL_PRIM RING_ISEMPTY, 1
+        PROLOGUE
         DPOPR eax
         mov ebx, [eax + 8]
         cmp ebx, [eax + 12]
         sete al
         movzx eax, al
         DPUSH eax
+        EPILOGUE
         ret
     END_IMPL
 
     ; check if a ring buffer is full (returns zero for not full and nonzero for full), takes the pointer to the ring buffer struct
     IMPL_PRIM RING_ISFULL, 1
+        PROLOGUE
         DPOPR eax
         mov ebx, [eax]
         mov ecx, [eax + 8]
@@ -2592,12 +2695,14 @@ START_SECTION IMPL_TABLE
         sete al
         movzx eax, al
         DPUSH eax
+        EPILOGUE
         ret
     END_IMPL
 
     ; enqueue an item into a ring buffer (use only if you know the buffer has space and didn't error!)
     ; takes the ring buffer and item
     IMPL_PRIM RING_ENQUEUE, 1
+        PROLOGUE
         DPOPR eax
         DPOPR ebx
 
@@ -2618,22 +2723,26 @@ START_SECTION IMPL_TABLE
         .dword:
             mov dword [eax + 16 + ecx*4], ebx
             inc dword [eax + 8]
+            EPILOGUE
             ret
 
         .word:
             mov word [eax + 16 + ecx*2], bx
             inc dword [eax + 8]
+            EPILOGUE
             ret
 
         .byte:
             mov byte [eax + 16 + ecx], bl
             inc dword [eax + 8]
+            EPILOGUE
             ret
     END_IMPL
 
     ; dequeue an item from a ring buffer (use only if you know the buffer is nonempty and didn't error!)
     ; takes the ring buffer
     IMPL_PRIM RING_DEQUEUE, 1
+        PROLOGUE
         DPOPR eax
 
         ; load and mask idx
@@ -2654,18 +2763,21 @@ START_SECTION IMPL_TABLE
             mov edx, dword [eax + 16 + ecx*4]
             DPUSH edx
             inc dword [eax + 12]
+            EPILOGUE
             ret
 
         .word:
             movzx edx, word [eax + 16 + ecx*2]
             DPUSH edx
             inc dword [eax + 12]
+            EPILOGUE
             ret
 
         .byte:
             movzx edx, byte [eax + 16 + ecx]
             DPUSH edx
             inc dword [eax + 12]
+            EPILOGUE
             ret
     END_IMPL
 
@@ -2678,6 +2790,7 @@ START_SECTION IMPL_TABLE
     ; attempt to enqueue an item into a ring buffer, takes the ring buffer and item,
     ; and returns an error code (0 = good, 1 = overflow, other values are buffer-specific errors)
     IMPL_PRIM RING_TRY_ENQUEUE, 1
+        PROLOGUE
         ; check for prior errors
         movzx eax, word [esi + 6]
         test eax, eax
@@ -2692,12 +2805,14 @@ START_SECTION IMPL_TABLE
         ; if not full and no prior errors, enqueue
         FCALL RING_ENQUEUE
         DPUSH 0
+        EPILOGUE
         ret
 
         .full:
             DPOP
             DPOP
             DPUSH 1
+            EPILOGUE
             ret
         .err:
             FCALL PANIC
@@ -2705,6 +2820,7 @@ START_SECTION IMPL_TABLE
             DPOP
             DPOP
             DPUSH eax
+            EPILOGUE
             ret
     END_IMPL
 
@@ -2712,6 +2828,7 @@ START_SECTION IMPL_TABLE
     ; returns an error code (0 = good, 2 = underflow, other values are buffer-specific errors)
     ; and the item, the "item" is -1 if there was an error
     IMPL_PRIM RING_TRY_DEQUEUE, 1
+        PROLOGUE
         ; check for prior errors
         movzx eax, word [esi + 6]
         test eax, eax
@@ -2726,23 +2843,27 @@ START_SECTION IMPL_TABLE
         ; if not empty and no prior errors, dequeue
         FCALL RING_DEQUEUE
         DPUSH 0
+        EPILOGUE
         ret
 
         .empty:
             DPOP
             DPUSH -1
             DPUSH 2
+            EPILOGUE
             ret
         .err:
             DPOP
             DPUSH -1
             DPUSH eax
+            EPILOGUE
             ret
     END_IMPL
 
     ; allocate from kernel arena, note that allocations made with this can never be freed
     ; we return -1 for allocation failure, otherwise a pointer to the allocated memory
     IMPL_PRIM KRESERVE, 1
+        PROLOGUE
         DPOPR ebx ; amount to alloc
 
         mov eax, [0x7c20]
@@ -2763,10 +2884,12 @@ START_SECTION IMPL_TABLE
         mov [eax + (karena_here - GVCT_START)], ebx
 
         DPUSH ecx
+        EPILOGUE
         ret
 
         .fail:
         DPUSH -1
+        EPILOGUE
         ret
     END_IMPL
 
@@ -2775,6 +2898,7 @@ START_SECTION IMPL_TABLE
     ; and overwrites its type with 129 (KARENA) as well as captures a pointer
     ; to it, returns 0 on success and -1 on failure
     IMPL_PRIM KARENA_INIT, 1
+        PROLOGUE
         DPOPR ecx ; length
         mov eax, [0x7c20]
 
@@ -2805,6 +2929,7 @@ START_SECTION IMPL_TABLE
                 mov dword [eax + (karena_entry - GVCT_START)], ebx
                 mov dword [eax + (karena_here - GVCT_START)], 0
                 DPUSH 0
+                EPILOGUE
                 ret
 
             .skip:
@@ -2813,6 +2938,7 @@ START_SECTION IMPL_TABLE
 
         .end:
             DPUSH -1
+            EPILOGUE
             ret
     END_IMPL
 
@@ -2821,10 +2947,12 @@ START_SECTION IMPL_TABLE
     ; with KRESERVE is rendered *invalid*, and the arena allocation pointer
     ; is reset to 0, making KRESERVE calls once more capable of succeeding
     IMPL_PRIM KARENA_REINIT, 1
+        PROLOGUE
         ; tiny impl, but it's worth it to make this a function
         ; just because it makes the intent clearer
         mov eax, [0x7c20]
         mov [eax + (karena_here - GVCT_START)], 0
+        EPILOGUE
         ret
     END_IMPL
 END_SECTION
