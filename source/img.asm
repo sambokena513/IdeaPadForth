@@ -2540,18 +2540,48 @@ START_SECTION IMPL_TABLE
         ret
     END_IMPL
 
-    ; dynamically resolve a word descriptor index and execute the function
+    IMPL_PRIM WORD, 1
+        ret
+    END_IMPL
+
+    IMPL_PRIM FIND, 1
+        ret
+    END_IMPL
+
+    ; dynamically call an xt, an xt being a word descriptor index, and generation
+    ; currently a generation mismatch triggers a kernel OOPS, rebooting after a few
+    ; seconds, once we have a scheduler it should instead only kill the task where
+    ; EXECUTE was called, and once we have exceptions it should throw an exception
+    ; (which will kill the task if it is not caught)
     IMPL_PRIM EXECUTE, 1
         PROLOGUE
         DPOPR eax
+        DPOPR ebx
+
         xor edx, edx
         mov ecx, 12
         mul ecx
+
+        ; check that generation matches
+        cmp ebx, [edi + eax + 4]
+        jne .fail
+
         ; restore registers here so that the
         ; PROLOGUE of the tail-called function
         ; won't unbalance the stack
         EPILOGUE
         jmp [edi + eax]
+
+        .fail:
+            mov eax, [0x7c20]
+            lea ebx, [eax + (executemsg - GVCT_START) + 4]
+            DPUSH ebx
+            DPUSH dword [eax + (executemsg - GVCT_START)]
+            FCALL OOPS
+    END_IMPL
+
+    IMPL_PRIM INTERPRET, 1
+        ret
     END_IMPL
 
     ; initialize the ps/2 controller and make sure the keyboard is using scan code set 2,
@@ -3064,12 +3094,10 @@ START_SECTION WD_TABLE
     WORD_DESC INIT, 0
     WORD_DESC KMAIN, 0
 
-    ; drivers
+    ; drivers/tasks
     WORD_DESC TIMER_HOOK, 0
     WORD_DESC KEYBOARD_DRIVER, 0
     WORD_DESC TERMINAL_DRIVER, 0
-
-    ; other tasks
     WORD_DESC SHELL, 0
 
     ; error handling
@@ -3106,7 +3134,11 @@ START_SECTION WD_TABLE
 
     ; command line
     WORD_DESC SHELL_INIT, 0
+
+    WORD_DESC WORD, 0
+    WORD_DESC FIND, 0
     WORD_DESC EXECUTE, 0
+    WORD_DESC INTERPRET, 0
 
     ; keyboard
     WORD_DESC KEYBOARD_INIT, 0
@@ -3158,7 +3190,10 @@ START_SECTION DICT
     DICT_ENTRY PUTH, "PUTH"
     DICT_ENTRY GETC, "GETC"
     DICT_ENTRY SHELL_INIT, "SHELL_INIT"
+    DICT_ENTRY WORD, "WORD"
+    DICT_ENTRY FIND, "FIND"
     DICT_ENTRY EXECUTE, "EXECUTE"
+    DICT_ENTRY INTERPRET, "INTERPRET"
     DICT_ENTRY KEYBOARD_INIT, "KEYBOARD_INIT"
     DICT_ENTRY RING_INIT, "RING_INIT"
     DICT_ENTRY RING_REINIT, "RING_REINIT"
@@ -3247,8 +3282,9 @@ START_SECTION GVCT
     ; kernel messages
     greetingmsg string `FIF IMG REVISION 1\n`
     initmsg string `Initialization complete. Entering main loop.\n`
-    oopsmsg string `OOPS - An unrecoverable runtime error occurred, rebooting in a few seconds.\n Error description: `
+    oopsmsg string `OOPS - An unrecoverable runtime error occurred, rebooting in a few seconds.\nError description: `
     watchdogmsg string `Kernel soft lockup detected.\n`
+    executemsg string `Attempted to call nonexistent word.`
 
     ; struct used by the jmp far in INIT to reload CS
     init_jmpptr:
