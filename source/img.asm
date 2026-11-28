@@ -1906,6 +1906,58 @@ START_SECTION IMPL_TABLE
             ret
     END_IMPL
 
+    ; clear the screen of a logical console, takes console and the glyph-attribute
+    ; pair to fill the console with
+    IMPL_PRIM CLS, 1
+        PROLOGUE
+        DPOPR ebx
+
+        ; put number of loop iterations into eax
+        xor edx, edx
+        movzx eax, word [ebx + 4]
+        movzx ecx, word [ebx + 6]
+        mul ecx
+
+        ; eax = limit, ebx = cell array, ecx = idx, edx = glyph+attr
+        mov ebx, [ebx]
+        xor ecx, ecx
+        DPOPR edx
+        .loop:
+            cmp ecx, eax
+            je .end
+            DPUSH eax
+
+            mov eax, [ebx + ecx*4]
+            mov ax, dx
+            test eax, 1 << 30
+            jz .not_displayed
+
+            .displayed:
+                mov [ebx + ecx*4], eax
+                DPUSH edx
+
+                mov edx, eax
+                shr edx, 16
+                and edx, ~(1 << 15 | 1 << 14)
+                mov word [0xb8000 + edx*2], ax
+
+                DPOPR edx
+                jmp .end_iter
+
+            .not_displayed:
+                or eax, 1 << 31
+                mov [ebx + ecx*4], eax
+
+            .end_iter:
+            DPOPR eax
+            inc ecx
+            jmp .loop
+        .end:
+
+        EPILOGUE
+        ret
+    END_IMPL
+
     ; initialize terminal, args are the console to display on
     ; and attribute bytes to use for normal text and for the cursor
     ; returns 0 on success, or -1 on failure
@@ -1967,58 +2019,6 @@ START_SECTION IMPL_TABLE
             DPUSH -1
             EPILOGUE
             ret
-    END_IMPL
-
-    ; clear the screen of a logical console, takes console and the glyph-attribute
-    ; pair to fill the console with
-    IMPL_PRIM CLS, 1
-        PROLOGUE
-        DPOPR ebx
-
-        ; put number of loop iterations into eax
-        xor edx, edx
-        movzx eax, word [ebx + 4]
-        movzx ecx, word [ebx + 6]
-        mul ecx
-
-        ; eax = limit, ebx = cell array, ecx = idx, edx = glyph+attr
-        mov ebx, [ebx]
-        xor ecx, ecx
-        DPOPR edx
-        .loop:
-            cmp ecx, eax
-            je .end
-            DPUSH eax
-
-            mov eax, [ebx + ecx*4]
-            mov ax, dx
-            test eax, 1 << 30
-            jz .not_displayed
-
-            .displayed:
-                mov [ebx + ecx*4], eax
-                DPUSH edx
-
-                mov edx, eax
-                shr edx, 16
-                and edx, ~(1 << 15 | 1 << 14)
-                mov word [0xb8000 + edx*2], ax
-
-                DPOPR edx
-                jmp .end_iter
-
-            .not_displayed:
-                or eax, 1 << 31
-                mov [ebx + ecx*4], eax
-
-            .end_iter:
-            DPOPR eax
-            inc ecx
-            jmp .loop
-        .end:
-
-        EPILOGUE
-        ret
     END_IMPL
 
     ; scroll the terminal back one line
@@ -3088,10 +3088,10 @@ START_SECTION WD_TABLE
     WORD_DESC RENDER_GLYPH, 0
     WORD_DESC QUERY_SIZE, 0
     WORD_DESC QUERY_CELL, 0
+    WORD_DESC CLS, 0
 
     ; terminal
     WORD_DESC TERMINAL_INIT, 0
-    WORD_DESC CLS, 0
     WORD_DESC SCROLL, 0
     WORD_DESC TERM_RESET, 0
     WORD_DESC TERM_BACKSPACE, 0
@@ -3146,8 +3146,8 @@ START_SECTION DICT
     DICT_ENTRY RENDER_GLYPH, "RENDER_GLYPH"
     DICT_ENTRY QUERY_SIZE, "QUERY_SIZE"
     DICT_ENTRY QUERY_CELL, "QUERY_CELL"
-    DICT_ENTRY TERMINAL_INIT, "TERMINAL_INIT"
     DICT_ENTRY CLS, "CLS"
+    DICT_ENTRY TERMINAL_INIT, "TERMINAL_INIT"
     DICT_ENTRY SCROLL, "SCROLL"
     DICT_ENTRY TERM_RESET, "TERM_RESET"
     DICT_ENTRY TERM_BACKSPACE, "TERM_BACKSPACE"
