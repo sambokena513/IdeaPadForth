@@ -349,11 +349,11 @@ org 0 ; not actually loaded at 0x00000000, but this gives us simple relative lab
     xchg eax, [0x7c20]
 %endmacro
 
-%macro SHELL_STACK_PIVOT 0
+%macro INTERPRET_STACK_PIVOT 0
     mov eax, [0x7c20]
-    xchg esp, [eax + (shell_rstck - GVCT_START)]
-    xchg ebp, [eax + (shell_dstck - GVCT_START)]
-    xchg esi, [eax + (shell_tos - GVCT_START)]
+    xchg esp, [eax + (interpret_rstck - GVCT_START)]
+    xchg ebp, [eax + (interpret_dstck - GVCT_START)]
+    xchg esi, [eax + (interpret_tos - GVCT_START)]
 %endmacro
 
 ; keyboard driver states
@@ -521,7 +521,7 @@ START_SECTION IMPL_TABLE
         out mPICd, al
 
         ; initialize command interpreter
-        FCALL SHELL_INIT
+        FCALL INTERPRET_INIT
         DPOPR ebx
         cmp ebx, -1
         je .fail
@@ -639,7 +639,7 @@ START_SECTION IMPL_TABLE
             DPUSH ebx
             DPUSH ecx
             DPUSH edx
-            FCALL SHELL
+            FCALL INTERPRET
             DPOPR edx
             DPOPR ecx
             DPOPR ebx
@@ -1217,35 +1217,35 @@ START_SECTION IMPL_TABLE
                 ret
     END_IMPL
 
-    ; process commands (placeholder at the moment, just prints character codes)
-    IMPL_PRIM SHELL, 1
+    ; process commands (placeholder at the moment, just prints tokens)
+    IMPL_PRIM INTERPRET, 1
         PROLOGUE
         mov eax, [0x7c20]
-        cmp byte [eax + (shell_state - GVCT_START)], 0
+        cmp byte [eax + (interpret_state - GVCT_START)], 0
         je .prompt
-        cmp byte [eax + (shell_state - GVCT_START)], 1
+        cmp byte [eax + (interpret_state - GVCT_START)], 1
         je .inp_loop
 
         ; prompt the user for input while signalling that the last input
         ; was rejected partway through
         .err:
             and dword [eax + (pending_work - GVCT_START)], ~(1 << 3)
-            mov byte [eax + (shell_state - GVCT_START)], 1
+            mov byte [eax + (interpret_state - GVCT_START)], 1
 
-            lea ebx, [eax + (shell_err - GVCT_START) + 4]
+            lea ebx, [eax + (interpret_err - GVCT_START) + 4]
             DPUSH ebx
-            DPUSH dword [eax + (shell_err - GVCT_START)]
+            DPUSH dword [eax + (interpret_err - GVCT_START)]
             FCALL PUTS
             jmp .end
 
         ; prompt the user for input
         .prompt:
             and dword [eax + (pending_work - GVCT_START)], ~(1 << 3)
-            mov byte [eax + (shell_state - GVCT_START)], 1
+            mov byte [eax + (interpret_state - GVCT_START)], 1
 
-            lea ebx, [eax + (shell_ok - GVCT_START) + 4]
+            lea ebx, [eax + (interpret_ok - GVCT_START) + 4]
             DPUSH ebx
-            DPUSH dword [eax + (shell_ok - GVCT_START)]
+            DPUSH dword [eax + (interpret_ok - GVCT_START)]
             FCALL PUTS
             jmp .end
 
@@ -1263,20 +1263,20 @@ START_SECTION IMPL_TABLE
 
             ; put the character into the word buffer
             mov eax, [0x7c20]
-            mov ecx, [eax + (shell_buf - GVCT_START)]
-            mov edx, [eax + (shell_buflen - GVCT_START)]
+            mov ecx, [eax + (interpret_buf - GVCT_START)]
+            mov edx, [eax + (interpret_buflen - GVCT_START)]
 
             mov byte [ecx + edx], bl
 
             inc edx
             cmp edx, 64
             je .overflow
-            mov [eax + (shell_buflen - GVCT_START)], edx
+            mov [eax + (interpret_buflen - GVCT_START)], edx
             jmp .inp_loop
 
             .overflow:
-                mov byte [eax + (shell_state - GVCT_START)], 2
-                mov [eax + (shell_buflen - GVCT_START)], 0
+                mov byte [eax + (interpret_state - GVCT_START)], 2
+                mov [eax + (interpret_buflen - GVCT_START)], 0
 
                 .overflow_loop:
                     FCALL GETC
@@ -1290,18 +1290,18 @@ START_SECTION IMPL_TABLE
             ; we skip on consecutive delimiters
             .delimiter:
                 mov eax, [0x7c20]
-                cmp dword [eax + (shell_buflen - GVCT_START)], 0
+                cmp dword [eax + (interpret_buflen - GVCT_START)], 0
                 je .inp_loop
 
             ; process one word of input (placeholder, for now just prints the word in brackets)
             .process_word:
                 DPUSH ebx
                 DPUSH ']'
-                DPUSH dword [eax + (shell_buf - GVCT_START)]
-                DPUSH dword [eax + (shell_buflen - GVCT_START)]
+                DPUSH dword [eax + (interpret_buf - GVCT_START)]
+                DPUSH dword [eax + (interpret_buflen - GVCT_START)]
                 DPUSH '['
 
-                mov [eax + (shell_buflen - GVCT_START)], 0
+                mov [eax + (interpret_buflen - GVCT_START)], 0
 
                 FCALL PUTC
                 FCALL PUTS
@@ -1312,7 +1312,7 @@ START_SECTION IMPL_TABLE
             ; suspend after draining terminal input
             .end_inp_loop:
                 mov eax, [0x7c20]
-                mov byte [eax + (shell_state - GVCT_START)], 0
+                mov byte [eax + (interpret_state - GVCT_START)], 0
                 jmp .end
 
         .end:
@@ -2508,12 +2508,12 @@ START_SECTION IMPL_TABLE
             ret
     END_IMPL
 
-    IMPL_PRIM SHELL_INIT, 1
+    IMPL_PRIM INTERPRET_INIT, 1
         PROLOGUE
         mov eax, [0x7c20]
         mov byte [eax + (terminal_cbuf_consumer - GVCT_START)], 3 ; we are task 3
         or dword [eax + (pending_work - GVCT_START)], 1 << 3
-        mov byte [eax + (shell_state - GVCT_START)], 0 ; start in the PROMPT state
+        mov byte [eax + (interpret_state - GVCT_START)], 0 ; start in the PROMPT state
 
         DPUSH 8192 + 64
         FCALL KRESERVE
@@ -2522,12 +2522,12 @@ START_SECTION IMPL_TABLE
         je .fail
 
         mov eax, [0x7c20]
-        mov [eax + (shell_buflen - GVCT_START)], 0
-        mov [eax + (shell_buf - GVCT_START)], ebx
+        mov [eax + (interpret_buflen - GVCT_START)], 0
+        mov [eax + (interpret_buf - GVCT_START)], ebx
         add ebx, 64
-        mov [eax + (shell_dstck - GVCT_START)], ebx
+        mov [eax + (interpret_dstck - GVCT_START)], ebx
         add ebx, 8192
-        mov [eax + (shell_rstck - GVCT_START)], ebx
+        mov [eax + (interpret_rstck - GVCT_START)], ebx
 
         .end:
         DPUSH 0
@@ -2540,10 +2540,17 @@ START_SECTION IMPL_TABLE
         ret
     END_IMPL
 
+    ; attempt to parse one word from the terminal, returning its length and a pointer,
+    ; if it runs out of input, WORD will return -1 for the length, and -1 for the pointer,
+    ; if the word it attempted to parse was too long, it will return -1 for the length, and
+    ; -2 for the pointer, note that after this you should probably drain and discard the rest
+    ; of the input since you can't tell where words begin and start anymore
     IMPL_PRIM WORD, 1
         ret
     END_IMPL
 
+    ; attempt to resolve a string to an xt (index and generation), returns -1 and -1 if
+    ; the word is not found
     IMPL_PRIM FIND, 1
         ret
     END_IMPL
@@ -2580,7 +2587,9 @@ START_SECTION IMPL_TABLE
             FCALL OOPS
     END_IMPL
 
-    IMPL_PRIM INTERPRET, 1
+    ; interpret a word, takes the count:pointer pair as an argument,
+    ; stack effect is that of the word when interpreted
+    IMPL_PRIM INTERPRET_WORD, 1
         ret
     END_IMPL
 
@@ -3098,7 +3107,7 @@ START_SECTION WD_TABLE
     WORD_DESC TIMER_HOOK, 0
     WORD_DESC KEYBOARD_DRIVER, 0
     WORD_DESC TERMINAL_DRIVER, 0
-    WORD_DESC SHELL, 0
+    WORD_DESC INTERPRET, 0
 
     ; error handling
     WORD_DESC OOPS, 0
@@ -3133,12 +3142,12 @@ START_SECTION WD_TABLE
     WORD_DESC GETC, 0
 
     ; command line
-    WORD_DESC SHELL_INIT, 0
+    WORD_DESC INTERPRET_INIT, 0
 
     WORD_DESC WORD, 0
     WORD_DESC FIND, 0
     WORD_DESC EXECUTE, 0
-    WORD_DESC INTERPRET, 0
+    WORD_DESC INTERPRET_WORD, 0
 
     ; keyboard
     WORD_DESC KEYBOARD_INIT, 0
@@ -3166,7 +3175,7 @@ START_SECTION DICT
     DICT_ENTRY TIMER_HOOK, "TIMER_HOOK"
     DICT_ENTRY KEYBOARD_DRIVER, "KEYBOARD_DRIVER"
     DICT_ENTRY TERMINAL_DRIVER, "TERMINAL_DRIVER"
-    DICT_ENTRY SHELL, "SHELL"
+    DICT_ENTRY INTERPRET, "INTERPRET"
     DICT_ENTRY OOPS, "OOPS"
     DICT_ENTRY STRESS, "STRESS"
     DICT_ENTRY PANIC, "PANIC"
@@ -3189,11 +3198,11 @@ START_SECTION DICT
     DICT_ENTRY PUTS, "PUTS"
     DICT_ENTRY PUTH, "PUTH"
     DICT_ENTRY GETC, "GETC"
-    DICT_ENTRY SHELL_INIT, "SHELL_INIT"
+    DICT_ENTRY INTERPRET_INIT, "INTERPRET_INIT"
     DICT_ENTRY WORD, "WORD"
     DICT_ENTRY FIND, "FIND"
     DICT_ENTRY EXECUTE, "EXECUTE"
-    DICT_ENTRY INTERPRET, "INTERPRET"
+    DICT_ENTRY INTERPRET_WORD, "INTERPRET_WORD"
     DICT_ENTRY KEYBOARD_INIT, "KEYBOARD_INIT"
     DICT_ENTRY RING_INIT, "RING_INIT"
     DICT_ENTRY RING_REINIT, "RING_REINIT"
@@ -3266,25 +3275,25 @@ START_SECTION GVCT
     terminal_cbuf_consumer db 0 ; bit index to set when terminal data becomes available
 
     ; shell / forth interpreter
-    shell_state db 0
-    shell_buflen dd 0 ; current amount of characters in word buffer
-    shell_buf dd 0 ; pointer to word buffer
+    interpret_state db 0
+    interpret_buflen dd 0 ; current amount of characters in word buffer
+    interpret_buf dd 0 ; pointer to word buffer
 
-    ; we use separate stacks for the shell to avoid
+    ; we use separate stacks for the interpret to avoid
     ; kernel stack corruption in interactive code
-    shell_rstck dd 0
-    shell_dstck dd 0
-    shell_tos dd 0
+    interpret_rstck dd 0
+    interpret_dstck dd 0
+    interpret_tos dd 0
 
-    shell_ok string `ok> `
-    shell_err string `err> `
+    interpret_ok string `ok> `
+    interpret_err string `err> `
 
     ; kernel messages
     greetingmsg string `FIF IMG REVISION 1\n`
     initmsg string `Initialization complete. Entering main loop.\n`
     oopsmsg string `OOPS - An unrecoverable runtime error occurred, rebooting in a few seconds.\nError description: `
     watchdogmsg string `Kernel soft lockup detected.\n`
-    executemsg string `Attempted to call nonexistent word.`
+    executemsg string `Word descriptor generation mismatch.`
 
     ; struct used by the jmp far in INIT to reload CS
     init_jmpptr:
