@@ -349,6 +349,13 @@ org 0 ; not actually loaded at 0x00000000, but this gives us simple relative lab
     xchg eax, [0x7c20]
 %endmacro
 
+%macro SHELL_STACK_PIVOT 0
+    mov eax, [0x7c20]
+    xchg esp, [eax + (shell_rstck - GVCT_START)]
+    xchg ebp, [eax + (shell_dstck - GVCT_START)]
+    xchg esi, [eax + (shell_tos - GVCT_START)]
+%endmacro
+
 ; keyboard driver states
 %define KBD_DRVR_NEUTRAL 0x00 ; default state, can move to EXT, BRK, or PAUSE1 from here depending on input
 %define KBD_DRVR_EXT 0x01 ; after receiving 0xe0 in NEUTRAL state, can move to EXT_BRK or back to NEUTRAL, emitting a key event
@@ -1219,9 +1226,11 @@ START_SECTION IMPL_TABLE
         cmp byte [eax + (shell_state - GVCT_START)], 1
         je .inp_loop
 
+        ; prompt the user for input while signalling that the last input
+        ; was rejected partway through
         .err:
             and dword [eax + (pending_work - GVCT_START)], ~(1 << 3)
-            mov byte [eax + (shell_state - GVCT_START)], 0
+            mov byte [eax + (shell_state - GVCT_START)], 1
 
             lea ebx, [eax + (shell_err - GVCT_START) + 4]
             DPUSH ebx
@@ -1229,6 +1238,7 @@ START_SECTION IMPL_TABLE
             FCALL PUTS
             jmp .end
 
+        ; prompt the user for input
         .prompt:
             and dword [eax + (pending_work - GVCT_START)], ~(1 << 3)
             mov byte [eax + (shell_state - GVCT_START)], 1
@@ -1239,21 +1249,71 @@ START_SECTION IMPL_TABLE
             FCALL PUTS
             jmp .end
 
+        ; get and process input
         .inp_loop:
             FCALL GETC
-            DPOPR eax
-            cmp eax, -1
+            DPOPR ebx
+            cmp ebx, -1
             je .end_inp_loop
 
-            DPUSH eax
-            FCALL PUTC
+            cmp ebx, 32
+            je .delimiter
+            cmp ebx, 10
+            je .delimiter
 
+            ; put the character into the word buffer
+            mov eax, [0x7c20]
+            mov ecx, [eax + (shell_buf - GVCT_START)]
+            mov edx, [eax + (shell_buflen - GVCT_START)]
+
+            mov byte [ecx + edx], bl
+
+            inc edx
+            cmp edx, 64
+            je .overflow
+            mov [eax + (shell_buflen - GVCT_START)], edx
             jmp .inp_loop
 
-        .end_inp_loop:
-            mov eax, [0x7c20]
-            mov byte [eax + (shell_state - GVCT_START)], 0
-            jmp .end
+            .overflow:
+                mov byte [eax + (shell_state - GVCT_START)], 2
+                mov [eax + (shell_buflen - GVCT_START)], 0
+
+                .overflow_loop:
+                    FCALL GETC
+                    DPOPR ebx
+                    cmp ebx, -1
+                    jne .overflow_loop
+
+                jmp .end
+
+            ; decide whether to process a word or skip a delimiter
+            ; we skip on consecutive delimiters
+            .delimiter:
+                mov eax, [0x7c20]
+                cmp dword [eax + (shell_buflen - GVCT_START)], 0
+                je .inp_loop
+
+            ; process one word of input (placeholder, for now just prints the word in brackets)
+            .process_word:
+                DPUSH ebx
+                DPUSH ']'
+                DPUSH dword [eax + (shell_buf - GVCT_START)]
+                DPUSH dword [eax + (shell_buflen - GVCT_START)]
+                DPUSH '['
+
+                mov [eax + (shell_buflen - GVCT_START)], 0
+
+                FCALL PUTC
+                FCALL PUTS
+                FCALL PUTC
+                FCALL PUTC
+                jmp .inp_loop
+
+            ; suspend after draining terminal input
+            .end_inp_loop:
+                mov eax, [0x7c20]
+                mov byte [eax + (shell_state - GVCT_START)], 0
+                jmp .end
 
         .end:
         EPILOGUE
@@ -2147,7 +2207,18 @@ START_SECTION IMPL_TABLE
                 jmp .after_dec
             .line_dec:
                 dec word [eax + (terminal_cursor - GVCT_START) + 2]
-                mov word [eax + (terminal_cursor - GVCT_START)], 0
+
+                ; since we moved back a line, we need to go to the end
+                ; of the last line, this means we need to get the line length
+                ; first
+                DPUSH dword [eax + (terminal_console - GVCT_START)]
+                FCALL QUERY_SIZE
+                DPOPR ebx
+
+                ; x = line_len - 1
+                dec ebx
+                mov eax, [0x7c20]
+                mov [eax + (terminal_cursor - GVCT_START)], bx
             .after_dec:
 
             ; get contents of cell that we're about to overwrite
@@ -2444,16 +2515,19 @@ START_SECTION IMPL_TABLE
         or dword [eax + (pending_work - GVCT_START)], 1 << 3
         mov byte [eax + (shell_state - GVCT_START)], 0 ; start in the PROMPT state
 
-        DPUSH 8192
+        DPUSH 8192 + 64
         FCALL KRESERVE
         DPOPR ebx
         cmp ebx, -1
         je .fail
 
         mov eax, [0x7c20]
-        mov [eax + (shell_dstack - GVCT_START)], ebx
+        mov [eax + (shell_buflen - GVCT_START)], 0
+        mov [eax + (shell_buf - GVCT_START)], ebx
+        add ebx, 64
+        mov [eax + (shell_dstck - GVCT_START)], ebx
         add ebx, 8192
-        mov [eax + (shell_rstack - GVCT_START)], ebx
+        mov [eax + (shell_rstck - GVCT_START)], ebx
 
         .end:
         DPUSH 0
@@ -3158,14 +3232,17 @@ START_SECTION GVCT
 
     ; shell / forth interpreter
     shell_state db 0
+    shell_buflen dd 0 ; current amount of characters in word buffer
+    shell_buf dd 0 ; pointer to word buffer
+
+    ; we use separate stacks for the shell to avoid
+    ; kernel stack corruption in interactive code
+    shell_rstck dd 0
+    shell_dstck dd 0
+    shell_tos dd 0
+
     shell_ok string `ok> `
     shell_err string `err> `
-    ; data and return stack used for the interactive environment
-    ; that words executed by the shell run in (not the normal stack
-    ; since that'd corrupt the kernel stack as soon as you pushed
-    ; even one number onto it)
-    shell_dstack dd 0
-    shell_rstack dd 0
 
     ; kernel messages
     greetingmsg string `FIF IMG REVISION 1\n`
